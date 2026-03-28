@@ -1,0 +1,90 @@
+# A股恐慌指数 - 配置文件
+
+# 权重配置 (总和应为1.0)
+weights:
+  implied_volatility: 0.40      # 波动率权重
+  limit_up_down_ratio: 0.30     # 涨跌停比权重
+  futures_premium: 0.20         # 期货贴水权重
+  southbound_flow: 0.10         # 南向资金权重
+
+# 情绪阈值
+thresholds:
+  greedy: 20           # 贪婪
+  optimistic: 40       # 乐观
+  neutral: 60          # 中性
+  panic: 80            # 恐慌
+  extreme_panic: 100   # 极度恐慌
+
+# 数据源配置
+data_sources:
+  index: "akshare"           # 指数数据
+  limit_up: "jrj_api"        # 涨跌停数据 - 金融界API
+  futures: "sina_futures"    # 期货数据
+  northbound: "akshare"      # 北向资金
+  southbound: "akshare"      # 南向资金
+
+# 网络配置
+network:
+  max_retries: 3
+  retry_delay: 1
+  timeout: 30
+
+# 缓存配置
+cache:
+  type: "sqlite"           # sqlite / pickle / redis
+  sqlite_path: "./data_cache/panic_index.db"
+  pickle_path: "./data_cache/panic_index_cache.pkl"
+  max_age_hours: 6
+  auto_update: true
+
+# 告警配置
+alerts:
+  enabled: true
+  
+  # 飞书配置
+  feishu:
+    enabled: false
+    webhook_url: ""          # 飞书机器人webhook地址
+    secret: ""               # 飞书机器人密钥
+  
+  # 微信配置 (通过OpenClaw)
+  weixin:
+    enabled: false
+    user_id: ""              # 用户ID
+  
+  # 告警规则
+  rules:
+    extreme_panic:
+      condition: ">= 80"
+      message: "🔴 极度恐慌！恐慌指数达到 {index}，可能是买入时机"
+      priority: "high"
+    
+    panic:
+      condition: ">= 60"
+      message: "🟠 恐慌情绪！恐慌指数 {index}，开始关注机会"
+      priority: "medium"
+    
+    greedy:
+      condition: "<= 20"
+      message: "🟢 极度贪婪！恐慌指数 {index}，注意风险"
+      priority: "high"
+
+# 报告配置
+report:
+  auto_generate: false
+  schedule: "15:30"        # 每日收盘后时间
+  output_dir: "./reports"
+  formats: ["png", "csv", "md"]
+
+# 可视化配置
+viz:
+  style: "seaborn-v0_8"
+  dpi: 150
+  figure_size: [16, 24]
+  font_path: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+
+# 回测配置
+backtest:
+  initial_capital: 100000  # 初始资金
+  commission: 0.0003       # 手续费率
+  slippage: 0.001          # 滑点
