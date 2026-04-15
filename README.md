@@ -38,7 +38,7 @@
 ### 安装依赖
 
 ```bash
-pip install akshare pandas numpy matplotlib pyyaml requests
+pip install akshare baostock pandas numpy matplotlib pyyaml requests
 ```
 
 ### 使用CLI工具
@@ -172,7 +172,7 @@ alerts:
 
 ## 📊 数据源
 
-- **指数数据**: [akshare](https://www.akshare.xyz/) (新浪财经)
+- **指数数据**: [Baostock](http://baostock.com/) (首选) / [akshare](https://www.akshare.xyz/) (新浪财经，备用)
 - **涨跌停数据**: 金融界API
 - **期货数据**: 新浪财经
 - **资金流向**: 东方财富
@@ -223,6 +223,13 @@ alerts:
 ```
 
 ## 📝 更新日志
+
+### v2.2.0 (2026-04-15)
+- ✅ 添加Baostock指数数据源（首选）
+- ✅ 更新图表时间周期为2年
+- ✅ 修复波动率计算和显示问题
+- ✅ 优化非交易日数据处理
+- ✅ 完善数据缓存机制
 
 ### v2.1.0 (2026-04-15)
 - ✅ 增加北向资金数据源
