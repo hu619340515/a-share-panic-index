@@ -13,7 +13,7 @@
 - 📊 **恐慌指数计算** - 基于波动率、涨跌停比、期货贴水、南向资金的多维度指数
 - 📈 **实时监控** - 支持盘中数据获取和历史趋势分析
 - 🧪 **策略回测** - 验证恐慌指数对投资决策的有效性
-- 🚨 **智能告警** - 飞书/微信推送，关键点位自动提醒
+- 🚨 **智能告警** - 飞书/微信/邮件推送，关键点位自动提醒
 - 💾 **数据存储** - SQLite数据库，支持增量更新和历史查询
 
 ### 技术指标
@@ -88,6 +88,18 @@ viz.plot_comprehensive(df, raw_data, 'output.png')
 
 ```
 a-share-panic-index/
+├── alerts/                 # 告警推送
+│   └── notifier.py         # 告警管理
+├── cli/                    # CLI命令模块
+│   ├── commands/           # 命令实现
+│   │   ├── current.py      # 当前恐慌指数
+│   │   ├── history.py      # 历史数据
+│   │   ├── chart.py        # 图表生成
+│   │   ├── backtest.py     # 策略回测
+│   │   ├── alert.py        # 告警测试
+│   │   ├── config.py       # 配置管理
+│   │   └── monitor.py      # 监控模式
+│   └── __init__.py
 ├── config/                 # 配置管理
 │   ├── settings.yaml       # 配置文件
 │   └── __init__.py         # Config类
@@ -95,23 +107,33 @@ a-share-panic-index/
 │   ├── calculator.py       # 恐慌指数计算
 │   └── backtest.py         # 回测引擎
 ├── data/                   # 数据层
+│   ├── async_manager.py    # 异步数据管理
 │   ├── cache.py            # 缓存管理
-│   └── database.py         # SQLite数据库
+│   ├── database.py         # SQLite数据库
+│   ├── manager.py          # 数据管理器
+│   └── __init__.py
 ├── fetchers/               # 数据获取
+│   ├── async_base.py       # 异步获取器基类
 │   ├── base.py             # 获取器基类
-│   ├── index.py            # 指数数据
-│   ├── limit_up.py         # 涨跌停数据
+│   ├── batch_fetcher.py    # 批量数据获取
+│   ├── fund_flow.py        # 资金流向
 │   ├── futures.py          # 期货数据
-│   └── fund_flow.py        # 资金流向
+│   ├── index.py            # 指数数据
+│   └── limit_up.py         # 涨跌停数据
+├── tests/                  # 单元测试
+│   ├── test_all.py
+│   ├── test_cli.py         # CLI命令测试
+│   └── test_data.py        # 数据模块测试
 ├── viz/                    # 可视化
 │   └── charts.py           # 图表生成
-├── alerts/                 # 告警推送
-│   └── notifier.py         # 告警管理
-├── tests/                  # 单元测试
-│   └── test_all.py
 ├── cli.py                  # CLI主入口
+├── exceptions.py           # 异常定义
+├── utils.py                # 工具函数
 ├── README.md               # 本文档
-└── LICENSE                 # MIT许可证
+├── README_CN.md            # 中文文档
+├── LICENSE                 # MIT许可证
+├── pyproject.toml          # 项目配置
+└── requirements.txt        # 依赖项
 ```
 
 ## ⚙️ 配置说明
@@ -139,6 +161,13 @@ alerts:
   feishu:
     enabled: false
     webhook_url: "your-webhook-url"
+  email:
+    enabled: false
+    smtp_server: smtp.example.com
+    smtp_port: 587
+    smtp_user: your_email@example.com
+    smtp_password: your_password
+    to_email: recipient@example.com
 ```
 
 ## 📊 数据源
@@ -194,6 +223,13 @@ alerts:
 ```
 
 ## 📝 更新日志
+
+### v2.1.0 (2026-04-15)
+- ✅ 增加北向资金数据源
+- ✅ 增加邮件告警渠道
+- ✅ 优化权重配置
+- ✅ 完善单元测试
+- ✅ 修复数据处理bug
 
 ### v2.0.0 (2026-03-28)
 - ✅ 模块化架构重构

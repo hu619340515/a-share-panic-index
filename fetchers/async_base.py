@@ -1,24 +1,27 @@
 """
-数据获取基类
+异步数据获取基类
 """
+
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import pandas as pd
+import asyncio
 
 from utils import error_handler
 
 
-class DataFetcher(ABC):
-    """数据获取器基类"""
+class AsyncDataFetcher(ABC):
+    """异步数据获取器基类"""
 
     def __init__(self):
         self.raw_data: Dict[str, Any] = {}
-        self.name: str = self.__class__.__name__
+        self.name = self.__class__.__name__
 
     @abstractmethod
-    @error_handler(retry=3, delay=1)
-    def fetch(self, start_date: datetime, end_date: datetime) -> Optional[pd.Series]:
+    async def fetch(
+        self, start_date: datetime, end_date: datetime
+    ) -> Optional[pd.Series]:
         """获取数据"""
         pass
 
