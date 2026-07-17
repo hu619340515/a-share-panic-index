@@ -26,12 +26,6 @@ class PanicIndexCalculator:
         if self.component_window <= 0:
             raise ValueError("指标滚动分位窗口必须为正整数")
 
-    @staticmethod
-    def standardize(series: pd.Series) -> pd.Series:
-        """兼容入口：使用此前全部可用值计算历史经验分位。"""
-
-        return historical_percentile_series(series, max(len(series), 1))
-
     def calculate(self, data: pd.DataFrame) -> pd.DataFrame:
         missing = [metric for metric in REQUIRED_METRICS if metric not in data.columns]
         if missing:
@@ -81,27 +75,3 @@ class PanicIndexCalculator:
             + weights["southbound_flow"] * frame["southbound_score"]
         ) * 100 / weight_sum
         return frame
-
-    @staticmethod
-    def get_signal(level: str, trend: str | None = None) -> dict[str, Any]:
-        """情绪只生成观察信号，不直接给出买卖指令。"""
-
-        if level == "极度恐慌":
-            signal = "contrarian_watch"
-            strength = "strong"
-            reason = "市场压力处于极端区间，仅作为反向观察信号"
-        elif level == "偏恐慌":
-            signal = "risk_watch"
-            strength = "medium"
-            reason = "市场压力偏高，关注风险变化"
-        elif level == "极度平静":
-            signal = "complacency_watch"
-            strength = "medium"
-            reason = "市场压力极低，关注过度平静风险"
-        else:
-            signal = "observe"
-            strength = "neutral"
-            reason = "情绪指标仅供观察，不直接构成交易建议"
-        if trend and trend != "基本稳定":
-            reason = f"{reason}；当前趋势为{trend}"
-        return {"signal": signal, "strength": strength, "reason": reason}

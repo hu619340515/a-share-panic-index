@@ -478,7 +478,7 @@ class ProviderExecutor:
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        raise ProviderTimeout("daily总超时")
+                        raise ProviderTimeout("图表刷新总超时")
                     timeout = min(timeout, remaining)
                 result = self._run_once(provider, start, end, target, context, timeout)
                 self.logger.info("数据源成功 provider=%s rows=%s", provider, len(result.data))

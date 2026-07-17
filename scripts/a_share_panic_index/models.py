@@ -40,7 +40,7 @@ class MarketContext:
 
 @dataclass
 class RunResult:
-    """daily 命令结构化返回。"""
+    """图表数据刷新结果。"""
 
     ok: bool
     status: str

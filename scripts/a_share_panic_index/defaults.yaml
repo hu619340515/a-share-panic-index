@@ -4,13 +4,6 @@ weights:
   futures_premium: 0.20
   southbound_flow: 0.10
 
-thresholds:
-  greedy: 20
-  optimistic: 40
-  neutral: 60
-  panic: 80
-  extreme_panic: 100
-
 emotion_model:
   version: "2.0"
   component_window: 504

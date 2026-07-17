@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from viz.charts import Visualizer
+from scripts.a_share_panic_index.charts import Visualizer
 import matplotlib.pyplot as plt
 
 from scripts.a_share_panic_index.charting import _load_trading_snapshots

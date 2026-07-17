@@ -1,60 +1,59 @@
 ---
 name: a-share-panic-index
-description: 生成A股市场压力指数结构化日报，执行交易日判断、增量取数、多数据源回退、动态分位情绪分级、数据新鲜度校验和SQLite持久化。用户询问A股市场压力、恐慌程度、当日风险观察信号或需要自动化日报时使用此技能。
+description: 生成A股恐慌指数120交易日综合PNG图，包含沪深300对比、动态情绪阈值、波动率、涨跌停家数和南向资金。Hermes在用户询问A股市场压力、恐慌程度、近期情绪走势或要求生成恐慌指数图时使用。
 ---
 
-# A股恐慌指数
+# A股恐慌指数图
 
-## 准备环境
+## 安装
 
 在技能目录执行：
 
 ```bash
-python3 -m pip install -r scripts/requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
-## 生成日报
+## 生成图表
 
-执行：
+执行唯一支持的命令：
 
 ```bash
-python3 scripts/cli.py daily
+python3 scripts/cli.py chart --output reports/panic_index.png
 ```
 
-命令最长允许运行300秒。标准输出只有一个UTF-8 JSON对象；将标准错误视为运行日志，不要与JSON拼接解析。
-当前日报JSON的 `schema_version` 为 `2.0`。
+命令最长允许运行300秒。标准输出只有一个UTF-8 JSON对象；标准错误是运行日志，
+不要与JSON拼接解析。
 
 可选参数：
 
 ```bash
-python3 scripts/cli.py daily \
+python3 scripts/cli.py chart \
+  --days 120 \
   --date 2026-07-17 \
-  --config /path/to/settings.yaml \
-  --database /path/to/panic_index.db \
+  --config config/settings.yaml \
+  --database data_cache/panic_index.db \
+  --output reports/panic_index.png \
   --force-refresh
 ```
 
 ## 处理结果
 
-- `exit_code=0`：成功、非交易日跳过或盘前返回上一交易日快照。
+- `exit_code=0` 且 `ok=true`：读取 `chart_path` 并将PNG展示给用户。
+- `is_fresh=false`：仍可展示最近有效快照，但必须说明数据未更新到目标交易日。
+- `quality_status=provisional`：必须说明当日使用临时数据源，后续运行会复核。
+- `trading_days < requested_trading_days`：必须说明历史数据不足，不要声称已有完整120日。
 - `exit_code=2`：参数或配置错误。
-- `exit_code=3`：目标交易日数据过期；读取 `retry.after_seconds` 后重试。
-- `exit_code=4`：四项必需指标没有完整对齐，不要把结果当作有效日报。
-- `exit_code=5`：计算或数据库事务失败。
-- `exit_code=6`：未预期错误。
-- `quality_status=provisional`：使用了当日备选数据源；可以展示，但需要提示后续会自动复核。
-- `result.emotion.classification_quality=warming_up`：历史不足252个交易日，分级使用扩展窗口，可信度低于正式模型。
-- `result=null`：没有可展示的有效快照。
+- `exit_code=3/4`：没有足够的完整指标生成任何图表；根据 `errors` 说明缺失项。
+- `exit_code=5`：图表生成或存储失败。
 
-向用户展示 `result.panic_index`、`result.status`、`result.emotion.percentile`、`result.emotion.trend`、`result.signal.reason`、`as_of_date` 和 `quality_status`。`result.signal` 只提供观察提示，不是买卖建议。如果 `ok=false` 但 `result` 不为空，可将其作为上一交易日备选快照，同时明确说明数据未更新。
+向用户展示图表，并简要说明 `as_of_date`、`panic_index`、`emotion`、
+`trading_days` 和数据质量。该图只描述市场压力，不提供买卖建议。
 
-## 数据约定
+## 图表约定
 
-- 波动率内部单位为年化小数；展示百分比时使用 `result.components.volatility_percent`。
-- 四项必需指标为波动率、涨跌停比、期货基差和南向资金。
-- 四项指标使用此前最多504个交易日计算历史分位；当天数据不参与当天标准化和阈值。
-- 情绪阈值由252日和756日历史分位按30%和70%混合，再使用EMA20平滑。
-- 情绪等级为极度平静、偏平静、中性、偏恐慌和极度恐慌，不使用滞回机制。
-- `result.emotion.event` 只描述等级变化，消息去重和重复提醒由 Hermes 工作流处理。
-- 默认数据库位于 `data_cache/panic_index.db`，首次升级会先备份旧库再重建。
-- 日志写入 `logs/daily.log`，按天轮转并保留30天。
+- 默认展示最近120个上交所交易日。
+- 周末和交易所休市日不进入横轴，但每个子图保留真实日期标签。
+- 五个面板依次为恐慌指数与沪深300、动态分位阈值、20日年化波动率、
+  涨跌停家数、南向资金。
+- 四项指标使用此前最多504个交易日计算历史分位；当天数据不参与当天标准化。
+- 动态阈值由252日和756日历史分位按30%/70%混合，并使用EMA20平滑。

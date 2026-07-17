@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""兼容入口，实际命令实现在 scripts/cli.py。"""
+"""A股恐慌指数图表技能入口。"""
 
 from scripts.cli import main
 

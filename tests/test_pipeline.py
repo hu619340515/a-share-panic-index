@@ -1,4 +1,4 @@
-"""daily 核心逻辑单元测试。"""
+"""图表数据管线核心逻辑单元测试。"""
 
 from __future__ import annotations
 
@@ -20,14 +20,13 @@ import pandas as pd
 
 from scripts.a_share_panic_index.calculator import PanicIndexCalculator
 from scripts.a_share_panic_index.calendar import TradingCalendar
-from scripts.a_share_panic_index.config import Settings
 from scripts.a_share_panic_index.database import Database, SCHEMA_VERSION
 from scripts.a_share_panic_index.providers import (
     ProviderError,
     ProviderExecutor,
     fetch_jrj_limit_ratio,
 )
-from scripts.a_share_panic_index.runner import combine_observations
+from scripts.a_share_panic_index.pipeline import combine_observations
 
 
 class TestCalculator(unittest.TestCase):
@@ -96,19 +95,8 @@ class TestTradingCalendar(unittest.TestCase):
             )
 
 
-class TestSettings(unittest.TestCase):
-    def test_legacy_weight_alias_overrides_default(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "settings.yaml"
-            path.write_text(
-                "weights:\n  implied_volatility: 0.55\n",
-                encoding="utf-8",
-            )
-            settings = Settings(str(path))
-        self.assertEqual(settings.weights["volatility"], 0.55)
-
 class TestDatabase(unittest.TestCase):
-    def test_legacy_database_is_backed_up_and_rebuilt(self):
+    def test_incompatible_database_is_backed_up_and_rebuilt(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "panic_index.db"
             with closing(sqlite3.connect(path)) as connection:

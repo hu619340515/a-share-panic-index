@@ -1,70 +1,17 @@
-alerts:
-  email:
-    enabled: false
-    smtp_password: your_password
-    smtp_port: 587
-    smtp_server: smtp.example.com
-    smtp_user: your_email@example.com
-    to_email: recipient@example.com
-  enabled: false
-  feishu:
-    enabled: false
-    secret: ''
-    webhook_url: ''
-  rules:
-    extreme_panic:
-      condition: '>= 80'
-      message: 🔴 极度恐慌观察！恐慌指数达到 {index}
-      priority: high
-    greedy:
-      condition: <= 20
-      message: 🟢 市场压力极低！恐慌指数 {index}，关注过度平静风险
-      priority: high
-    panic:
-      condition: '>= 60'
-      message: 🟠 市场压力偏高！恐慌指数 {index}，关注风险变化
-      priority: medium
-  weixin:
-    enabled: false
-    user_id: ''
-backtest:
-  commission: 0.0003
-  initial_capital: 100000
-  slippage: 0.001
-cache:
-  auto_update: true
-  max_age_hours: 6
-  pickle_path: ./data_cache/panic_index_cache.pkl
-  sqlite_path: ./data_cache/panic_index.db
-  type: sqlite
-data_sources:
-  futures: sina_futures
-  index: akshare
-  limit_up: jrj_api
-  northbound: akshare
-  southbound: akshare
-report:
-  auto_generate: false
-  formats:
-  - png
-  - csv
-  - md
-  output_dir: ./reports
-  schedule: '15:30'
-thresholds:
-  extreme_panic: 100
-  greedy: 20
-  neutral: 60
-  optimistic: 40
-  panic: 80
+weights:
+  volatility: 0.40
+  limit_up_down_ratio: 0.30
+  futures_premium: 0.20
+  southbound_flow: 0.10
+
 emotion_model:
-  version: '2.0'
+  version: "2.0"
   component_window: 504
   min_periods: 252
   short_threshold_window: 252
   long_threshold_window: 756
-  short_weight: 0.3
-  long_weight: 0.7
+  short_weight: 0.30
+  long_weight: 0.70
   smoothing_span: 20
   quantiles:
     extreme_calm: 0.05
@@ -74,37 +21,30 @@ emotion_model:
   trend:
     fast_change_threshold: 10
     slow_change_threshold: 3
-viz:
-  dpi: 150
-  figure_size:
-  - 16
-  - 24
-  font_path: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
-  style: seaborn-v0_8
-weights:
-  futures_premium: 0.2
-  limit_up_down_ratio: 0.3
-  southbound_flow: 0.1
-  volatility: 0.4
 
 database:
-  overlap_days: 40
   path: ./data_cache/panic_index.db
   rebuild_days: 1100
-
-logging:
-  directory: ./logs
-  level: INFO
-  retention_days: 30
+  overlap_days: 40
 
 market:
   calendar: XSHG
-  data_ready_time: '15:30'
   timezone: Asia/Shanghai
+  data_ready_time: "15:30"
 
 network:
   max_retries: 3
-  provider_timeout: 30
   retry_delay: 2
-  timeout: 30
+  provider_timeout: 30
   total_timeout: 300
+
+logging:
+  directory: ./logs
+  retention_days: 30
+  level: INFO
+
+viz:
+  dpi: 150
+  figure_size: [16, 24]
+  font_path: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  style: seaborn-v0_8-whitegrid

@@ -1,4 +1,4 @@
-"""daily 单次运行编排。"""
+"""综合图所需数据的刷新与计算管线。"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from .models import REQUIRED_METRICS, ProviderResult, RunResult
 from .providers import PROVIDER_CHAINS, ProviderError, ProviderExecutor
 
 
-class DailyRunner:
+class ChartDataRunner:
     def __init__(
         self,
         settings: Settings,
@@ -70,7 +70,7 @@ class DailyRunner:
         else:
             start = latest.date() - timedelta(days=int(database_config.get("overlap_days", 40)))
         end = context.expected_trade_date
-        self.logger.info("daily开始 start=%s end=%s force_refresh=%s", start, end, force_refresh)
+        self.logger.info("图表数据刷新 start=%s end=%s force_refresh=%s", start, end, force_refresh)
 
         observations, provider_errors = self._fetch_all(start, end, end, started)
         existing = self.database.load_observations()
@@ -228,7 +228,7 @@ class DailyRunner:
         for provider in providers:
             remaining = self.total_timeout - (time.monotonic() - started)
             if remaining <= 0:
-                errors.append({"provider": provider, "type": "timeout", "message": "daily总超时"})
+                errors.append({"provider": provider, "type": "timeout", "message": "图表刷新总超时"})
                 return
             self.executor.timeout = min(self.provider_timeout, remaining)
             try:
@@ -367,7 +367,6 @@ class DailyRunner:
         return {
             "panic_index": round(value, 4),
             "status": status,
-            "signal": PanicIndexCalculator.get_signal(status, trend),
             "emotion": {
                 "model_version": str(row["model_version"]),
                 "score": round(value, 4),

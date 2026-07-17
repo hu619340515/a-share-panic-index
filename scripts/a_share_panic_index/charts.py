@@ -19,7 +19,7 @@ from matplotlib.gridspec import GridSpec
 
 
 class Visualizer:
-    """同时兼容 v4 快照和旧版 DataFrame 的图表生成器。"""
+    """将 v4 快照绘制为 Hermes 使用的综合图。"""
 
     def __init__(self, viz_config: dict[str, Any] | None = None):
         self.viz_config, self.thresholds = self._load_config(viz_config)
@@ -44,27 +44,13 @@ class Visualizer:
 
     @staticmethod
     def _load_config(viz_config: dict[str, Any] | None):
-        if viz_config is not None:
-            return dict(viz_config), {
-                "greedy": 20,
-                "optimistic": 40,
-                "neutral": 60,
-                "panic": 80,
-                "extreme_panic": 100,
-            }
-        try:
-            from config import get_config
-
-            config = get_config()
-            return dict(config.viz_config), dict(config.thresholds)
-        except Exception:
-            return {}, {
-                "greedy": 20,
-                "optimistic": 40,
-                "neutral": 60,
-                "panic": 80,
-                "extreme_panic": 100,
-            }
+        return dict(viz_config or {}), {
+            "greedy": 20,
+            "optimistic": 40,
+            "neutral": 60,
+            "panic": 80,
+            "extreme_panic": 100,
+        }
 
     def _resolve_chinese_font(self) -> tuple[fm.FontProperties, str | None]:
         configured = os.environ.get("PANIC_INDEX_FONT_PATH") or self.viz_config.get(
@@ -112,27 +98,6 @@ class Visualizer:
                 return fm.FontProperties(fname=path), str(Path(path).resolve())
         return fm.FontProperties(), None
 
-    def plot_comparison(
-        self,
-        df: pd.DataFrame,
-        raw_data: dict | None,
-        output_path: str = "panic_vs_index.png",
-    ) -> None:
-        frame = self._prepare_frame(df)
-        fig, ax = plt.subplots(figsize=(16, 8))
-        self._plot_panic_vs_index(ax, frame, raw_data or {})
-        ax.set_xlabel("日期", fontproperties=self.chinese_font, fontsize=11)
-        self._format_trading_dates(ax, frame.index)
-        latest = frame.iloc[-1]
-        fig.suptitle(
-            self._dashboard_title(latest, frame.index[-1], len(frame)),
-            fontproperties=self.chinese_font,
-            fontsize=15,
-            fontweight="bold",
-        )
-        fig.tight_layout(rect=[0, 0, 1, 0.95])
-        self._save(fig, output_path)
-
     def plot_comprehensive(
         self,
         df: pd.DataFrame,
@@ -166,17 +131,6 @@ class Visualizer:
             y=0.995,
         )
         fig.subplots_adjust(top=0.965, bottom=0.04, left=0.08, right=0.92, hspace=0.4)
-        self._save(fig, output_path)
-
-    def plot_simple(
-        self, df: pd.DataFrame, output_path: str = "panic_index.png"
-    ) -> None:
-        frame = self._prepare_frame(df)
-        fig, ax = plt.subplots(figsize=(12, 6))
-        self._plot_panic_index(ax, frame)
-        ax.set_xlabel("日期", fontproperties=self.chinese_font, fontsize=11)
-        self._format_trading_dates(ax, frame.index)
-        fig.tight_layout()
         self._save(fig, output_path)
 
     def _plot_panic_vs_index(

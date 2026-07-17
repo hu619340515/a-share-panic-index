@@ -1,4 +1,4 @@
-"""daily 运行配置。"""
+"""图表技能运行配置。"""
 
 from __future__ import annotations
 
@@ -27,11 +27,7 @@ class Settings:
             if not self.config_path.exists():
                 raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
             user_config = self._load_yaml(self.config_path)
-            user_weights = user_config.get("weights", {})
-            if "implied_volatility" in user_weights and "volatility" not in user_weights:
-                user_weights["volatility"] = user_weights["implied_volatility"]
             self._merge(self._config, user_config)
-        self._normalize_compatibility()
         self._validate()
 
     @staticmethod
@@ -46,16 +42,6 @@ class Settings:
                 cls._merge(target[key], value)
             else:
                 target[key] = deepcopy(value)
-
-    def _normalize_compatibility(self) -> None:
-        weights = self._config.setdefault("weights", {})
-        if "volatility" not in weights and "implied_volatility" in weights:
-            weights["volatility"] = weights["implied_volatility"]
-
-        legacy_cache = self._config.get("cache", {})
-        database = self._config.setdefault("database", {})
-        if "path" not in database and legacy_cache.get("sqlite_path"):
-            database["path"] = legacy_cache["sqlite_path"]
 
     def _validate(self) -> None:
         try:
@@ -86,10 +72,6 @@ class Settings:
     @property
     def weights(self) -> dict[str, float]:
         return self.section("weights")
-
-    @property
-    def thresholds(self) -> dict[str, float]:
-        return self.section("thresholds")
 
     @property
     def emotion_model(self) -> dict[str, Any]:

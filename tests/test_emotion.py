@@ -19,7 +19,7 @@ from scripts.a_share_panic_index.emotion import (
     historical_percentile_series,
 )
 from scripts.a_share_panic_index.config import Settings
-from scripts.a_share_panic_index.runner import combine_observations
+from scripts.a_share_panic_index.pipeline import combine_observations
 
 
 WEIGHTS = {

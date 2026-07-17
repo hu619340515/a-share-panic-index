@@ -23,7 +23,7 @@ def configure_logging(directory: Path, retention_days: int, level: str, run_id: 
     logger.addHandler(console)
 
     file_handler = TimedRotatingFileHandler(
-        directory / "daily.log",
+        directory / "chart.log",
         when="midnight",
         backupCount=retention_days,
         encoding="utf-8",
