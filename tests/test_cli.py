@@ -26,7 +26,7 @@ class TestDailyCLI(unittest.TestCase):
         self.config_path.write_text(
             """
 database:
-  rebuild_days: 730
+  rebuild_days: 1100
   overlap_days: 40
 logging:
   directory: ./logs
@@ -54,6 +54,7 @@ market:
         target_date: str,
         root_entry: bool = False,
         fixture_path: Path = FIXTURE,
+        database_path: Path | None = None,
     ):
         environment = os.environ.copy()
         environment.update(
@@ -74,7 +75,7 @@ market:
                 "--config",
                 str(self.config_path),
                 "--database",
-                str(self.database_path),
+                str(database_path or self.database_path),
             ],
             cwd=PROJECT_ROOT,
             env=environment,
@@ -91,14 +92,25 @@ market:
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
 
         payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema_version"], "2.0")
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "success_provisional")
         self.assertEqual(payload["as_of_date"], "2026-07-17")
         self.assertEqual(payload["quality_status"], "provisional")
+        self.assertEqual(payload["storage"]["incremental_start"], "2023-07-13")
         self.assertLess(payload["result"]["components"]["volatility"], 1)
         self.assertAlmostEqual(
             payload["result"]["components"]["volatility_percent"], 35.0
         )
+        self.assertEqual(payload["result"]["status"], "极度恐慌")
+        self.assertEqual(payload["result"]["emotion"]["model_version"], "2.0")
+        self.assertEqual(
+            payload["result"]["emotion"]["classification_quality"],
+            "warming_up",
+        )
+        self.assertGreaterEqual(payload["result"]["emotion"]["percentile"], 90)
+        self.assertEqual(payload["result"]["signal"]["signal"], "contrarian_watch")
+        self.assertNotIn(payload["result"]["signal"]["signal"], {"buy", "sell"})
         self.assertIn("daily开始", completed.stderr)
 
         with closing(sqlite3.connect(self.database_path)) as connection:
@@ -108,6 +120,33 @@ market:
         self.assertIsNotNone(row)
         self.assertIsNotNone(row[0])
         self.assertEqual(row[1], "provisional")
+
+    def test_incremental_and_full_rebuild_produce_same_target_result(self):
+        incremental_database = self.temp_path / "incremental.db"
+        full_database = self.temp_path / "full.db"
+
+        first = self.run_daily("2026-07-16", database_path=incremental_database)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        incremental = self.run_daily(
+            "2026-07-17",
+            database_path=incremental_database,
+        )
+        full = self.run_daily("2026-07-17", database_path=full_database)
+        self.assertEqual(incremental.returncode, 0, incremental.stderr)
+        self.assertEqual(full.returncode, 0, full.stderr)
+
+        incremental_result = json.loads(incremental.stdout)["result"]
+        full_result = json.loads(full.stdout)["result"]
+        self.assertEqual(incremental_result["panic_index"], full_result["panic_index"])
+        self.assertEqual(incremental_result["status"], full_result["status"])
+        self.assertEqual(
+            incremental_result["emotion"]["thresholds"],
+            full_result["emotion"]["thresholds"],
+        )
+        self.assertEqual(
+            incremental_result["emotion"]["percentile"],
+            full_result["emotion"]["percentile"],
+        )
 
     def test_root_cli_is_compatible(self):
         completed = self.run_daily("2026-07-17", root_entry=True)
@@ -211,7 +250,43 @@ market:
             check=False,
         )
         self.assertEqual(completed.returncode, 2)
-        self.assertEqual(json.loads(completed.stdout)["status"], "configuration_error")
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema_version"], "2.0")
+        self.assertEqual(payload["status"], "configuration_error")
+
+    def test_invalid_emotion_model_returns_exit_code_two(self):
+        invalid_config = self.temp_path / "invalid-emotion.yaml"
+        invalid_config.write_text(
+            """
+emotion_model:
+  short_threshold_window: 800
+  long_threshold_window: 756
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts/cli.py"),
+                "daily",
+                "--date",
+                "2026-07-17",
+                "--config",
+                str(invalid_config),
+                "--database",
+                str(self.database_path),
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "configuration_error")
+        self.assertIn("短期阈值窗口", payload["errors"][0]["message"])
 
     def test_invalid_date_returns_json_and_exit_code_two(self):
         completed = subprocess.run(
@@ -230,6 +305,7 @@ market:
         )
         self.assertEqual(completed.returncode, 2)
         payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema_version"], "2.0")
         self.assertEqual(payload["status"], "argument_error")
         self.assertEqual(completed.stderr, "")
 

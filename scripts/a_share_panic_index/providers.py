@@ -9,6 +9,7 @@ import os
 import queue
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -210,8 +211,7 @@ def fetch_jrj_limit_ratio(start: date, end: date, target: date, context: dict) -
         months.append(current.strftime("%Y%m"))
         current = (current.replace(day=28) + timedelta(days=4)).replace(day=1)
 
-    records = []
-    for year_month in months:
+    def fetch_month(year_month: str) -> list[dict[str, Any]]:
         response = requests.post(
             url,
             headers=headers,
@@ -221,14 +221,15 @@ def fetch_jrj_limit_ratio(start: date, end: date, target: date, context: dict) -
         response.raise_for_status()
         payload = response.json()
         if payload.get("code") != 20000:
-            continue
+            return []
+        month_records = []
         for item in payload.get("data", {}).get("list", []):
             value_date = datetime.strptime(str(item["tradeDate"]), "%Y%m%d").date()
             if start <= value_date <= end:
                 limit_up = int(item["upLimitCount"])
                 limit_down = int(item["downLimitCount"])
                 total = limit_up + limit_down
-                records.append(
+                month_records.append(
                     {
                         "date": value_date,
                         "limit_up": limit_up,
@@ -236,6 +237,13 @@ def fetch_jrj_limit_ratio(start: date, end: date, target: date, context: dict) -
                         "limit_ratio": limit_down / total if total else 0.5,
                     }
                 )
+        return month_records
+
+    records = []
+    max_workers = min(6, max(len(months), 1))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for month_records in executor.map(fetch_month, months):
+            records.extend(month_records)
     frame = pd.DataFrame(records)
     if frame.empty:
         raise ProviderError("金融界涨跌停历史返回空数据")

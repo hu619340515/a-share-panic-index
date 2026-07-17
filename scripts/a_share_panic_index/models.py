@@ -61,7 +61,7 @@ class RunResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "1.0",
+            "schema_version": "2.0",
             "ok": self.ok,
             "status": self.status,
             "exit_code": self.exit_code,

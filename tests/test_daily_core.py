@@ -7,10 +7,13 @@ import logging
 import os
 import sqlite3
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -19,7 +22,11 @@ from scripts.a_share_panic_index.calculator import PanicIndexCalculator
 from scripts.a_share_panic_index.calendar import TradingCalendar
 from scripts.a_share_panic_index.config import Settings
 from scripts.a_share_panic_index.database import Database, SCHEMA_VERSION
-from scripts.a_share_panic_index.providers import ProviderError, ProviderExecutor
+from scripts.a_share_panic_index.providers import (
+    ProviderError,
+    ProviderExecutor,
+    fetch_jrj_limit_ratio,
+)
 from scripts.a_share_panic_index.runner import combine_observations
 
 
@@ -216,6 +223,51 @@ class TestProviderTimeout(unittest.TestCase):
                     os.environ["PANIC_INDEX_FIXTURE_FILE"] = previous
                 if disabled is not None:
                     os.environ["PANIC_INDEX_DISABLE_SUBPROCESS"] = disabled
+
+
+class TestHistoricalProviders(unittest.TestCase):
+    def test_jrj_month_history_is_fetched_concurrently(self):
+        thread_names = set()
+        lock = threading.Lock()
+
+        class Response:
+            def __init__(self, year_month):
+                self.year_month = year_month
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "code": 20000,
+                    "data": {
+                        "list": [
+                            {
+                                "tradeDate": f"{self.year_month}01",
+                                "upLimitCount": 80,
+                                "downLimitCount": 20,
+                            }
+                        ]
+                    },
+                }
+
+        def fake_post(*args, **kwargs):
+            with lock:
+                thread_names.add(threading.current_thread().name)
+            time.sleep(0.005)
+            return Response(kwargs["json"]["yearMonth"])
+
+        with patch("requests.post", side_effect=fake_post) as post:
+            result = fetch_jrj_limit_ratio(
+                datetime(2023, 7, 1).date(),
+                datetime(2026, 7, 17).date(),
+                datetime(2026, 7, 17).date(),
+                {},
+            )
+
+        self.assertEqual(post.call_count, 37)
+        self.assertEqual(len(result.data), 37)
+        self.assertGreater(len(thread_names), 1)
 
 
 def observation_frame(source: str, provisional: bool, value: float) -> pd.DataFrame:

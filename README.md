@@ -1,9 +1,9 @@
 # A股恐慌指数监控 (A-Share Panic Index)
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> 专业的A股市场恐慌/贪婪指数计算与监控工具，支持多维度数据分析、历史回测和告警推送。
+> A股市场压力指数计算与监控工具，支持动态分位情绪分级、结构化日报、历史回测和告警事件输出。
 
 ![Panic Index Chart](docs/images/panic_index_demo.png)
 
@@ -24,14 +24,16 @@
 | 期货贴水 | 20% | 股指期货与现货基差 |
 | 南向资金 | 10% | 港股通资金流向 |
 
-### 情绪分级
+### 动态情绪分级
 ```
-0-20 分: 🟢 贪婪 (极度乐观，注意风险)
-20-40分: 🟡 乐观 (积极情绪，可持有)
-40-60分: ⚪ 中性 (观望为主)
-60-80分: 🟠 恐慌 (开始关注机会)
-80-100分: 🔴 极度恐慌 (可能是买入时机)
+低于动态P05: 🟢 极度平静
+P05-P25:      🟡 偏平静
+P25-P75:      ⚪ 中性
+P75-P95:      🟠 偏恐慌
+高于动态P95: 🔴 极度恐慌
 ```
+
+四项指标使用此前最多504个交易日计算经验分位；当天数据不参与当天标准化。动态阈值由252日和756日历史分位按30%/70%混合，并使用EMA20平滑。分级无滞回，通知降噪由外部工作流处理。
 
 ## 🚀 快速开始
 
@@ -73,6 +75,9 @@ python3 scripts/cli.py daily --date 2026-07-17 --database ./data_cache/panic_ind
 系统按上交所交易日历判断目标日期，15:30后要求取得当日数据；主历史源
 尚未更新时会切换到当日备选源，并将结果标记为 `provisional`，后续运行
 自动使用主历史源复核覆盖。
+
+`result.emotion` 包含模型版本、历史分位、动态阈值、趋势和等级变化事件；
+`result.signal` 只提供观察提示，不直接输出买卖建议。
 
 ### Python API
 
@@ -159,12 +164,21 @@ weights:
   futures_premium: 0.20
   southbound_flow: 0.10
 
-# 情绪阈值
-thresholds:
-  greedy: 20
-  optimistic: 40
-  neutral: 60
-  panic: 80
+# 动态情绪模型
+emotion_model:
+  version: "2.0"
+  component_window: 504
+  min_periods: 252
+  short_threshold_window: 252
+  long_threshold_window: 756
+  short_weight: 0.30
+  long_weight: 0.70
+  smoothing_span: 20
+  quantiles:
+    extreme_calm: 0.05
+    calm: 0.25
+    panic: 0.75
+    extreme_panic: 0.95
 
 # 告警配置
 alerts:
@@ -191,20 +205,21 @@ alerts:
 ## 🧪 测试
 
 ```bash
-# 运行单元测试
-python3 tests/test_all.py
+# 运行默认离线测试
+python -m unittest discover -s tests -v
 ```
 
 测试覆盖:
 - 恐慌指数计算
-- 标准化函数
-- 情绪状态判断
+- 历史滚动分位标准化和未来数据隔离
+- 长短周期动态阈值、EMA平滑和无滞回分级
+- 趋势、等级变化事件和数据库审计字段
 - 回测引擎
 - 配置管理
 
 ## 📈 回测策略
 
-支持策略:
+旧版回测模块仍支持以下策略，但不会被 `daily` 自动转换为买卖建议：
 - `extreme_panic_buy`: 恐慌>80买入，<20卖出
 - `panic_buy`: 恐慌>60买入，<40卖出  
 - `contrarian`: 反向策略
@@ -215,25 +230,27 @@ python3 tests/test_all.py
 - 夏普比率
 - 胜率
 
-## 🔔 告警规则
+## 🔔 Hermes通知事件
 
-```yaml
-alerts:
-  rules:
-    extreme_panic:
-      condition: ">= 80"
-      message: "🔴 极度恐慌！可能是买入时机"
-    
-    panic:
-      condition: ">= 60"
-      message: "🟠 恐慌情绪，开始关注机会"
-    
-    greedy:
-      condition: "<= 20"
-      message: "🟢 极度贪婪，注意风险"
+```json
+{
+  "level": "极度恐慌",
+  "event": "entered_extreme_panic",
+  "trend": "快速升温",
+  "level_changed": true
+}
 ```
 
+`daily` 只输出等级和变化事件。是否每天发送、只在等级变化时发送，或极端状态持续时重复提醒，由Hermes工作流配置，不在情绪模型中加入滞回或买卖规则。
+
 ## 📝 更新日志
+
+### v4.0.0 (2026-07-17)
+- ✅ 使用历史滚动分位替代全历史Min-Max标准化
+- ✅ 增加252/756日混合动态阈值和EMA20平滑
+- ✅ 增加无滞回五档压力分级、趋势和等级变化事件
+- ✅ 数据库保存每日阈值、历史分位和模型版本
+- ✅ 情绪信号改为观察型提示，不直接输出买卖指令
 
 ### v2.2.0 (2026-04-15)
 - ✅ 添加Baostock指数数据源（首选）

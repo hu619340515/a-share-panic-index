@@ -11,9 +11,27 @@ thresholds:
   panic: 80
   extreme_panic: 100
 
+emotion_model:
+  version: "2.0"
+  component_window: 504
+  min_periods: 252
+  short_threshold_window: 252
+  long_threshold_window: 756
+  short_weight: 0.30
+  long_weight: 0.70
+  smoothing_span: 20
+  quantiles:
+    extreme_calm: 0.05
+    calm: 0.25
+    panic: 0.75
+    extreme_panic: 0.95
+  trend:
+    fast_change_threshold: 10
+    slow_change_threshold: 3
+
 database:
   path: ./data_cache/panic_index.db
-  rebuild_days: 730
+  rebuild_days: 1100
   overlap_days: 40
 
 market:

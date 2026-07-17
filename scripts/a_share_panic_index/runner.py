@@ -13,6 +13,7 @@ from .calculator import PanicIndexCalculator
 from .calendar import TradingCalendar
 from .config import Settings
 from .database import Database
+from .emotion import DynamicEmotionClassifier
 from .models import REQUIRED_METRICS, ProviderResult, RunResult
 from .providers import PROVIDER_CHAINS, ProviderError, ProviderExecutor
 
@@ -64,7 +65,7 @@ class DailyRunner:
         latest = None if force_refresh else self.database.latest_observation_date()
         if latest is None:
             start = context.expected_trade_date - timedelta(
-                days=int(database_config.get("rebuild_days", 730))
+                days=int(database_config.get("rebuild_days", 1100))
             )
         else:
             start = latest.date() - timedelta(days=int(database_config.get("overlap_days", 40)))
@@ -255,8 +256,10 @@ class DailyRunner:
 
     def _calculate_rows(self, observations: pd.DataFrame) -> pd.DataFrame:
         values = observations.pivot(index="date", columns="metric", values="value").sort_index()
-        calculator = PanicIndexCalculator(self.settings.weights, self.settings.thresholds)
+        emotion_config = self.settings.emotion_model
+        calculator = PanicIndexCalculator(self.settings.weights, emotion_config)
         calculated = calculator.calculate(values)
+        calculated = DynamicEmotionClassifier(emotion_config).classify(calculated)
 
         metadata = observations.set_index(["date", "metric"])[
             ["source", "provisional"]
@@ -359,10 +362,37 @@ class DailyRunner:
     @staticmethod
     def _result_payload(row) -> dict[str, Any]:
         value = float(row["panic_index"])
+        status = str(row["status"])
+        trend = str(row["trend"])
         return {
             "panic_index": round(value, 4),
-            "status": row["status"],
-            "signal": PanicIndexCalculator.get_signal(value),
+            "status": status,
+            "signal": PanicIndexCalculator.get_signal(status, trend),
+            "emotion": {
+                "model_version": str(row["model_version"]),
+                "score": round(value, 4),
+                "percentile": round(float(row["panic_percentile"]), 4),
+                "level": status,
+                "previous_level": nullable_text(row.get("previous_level")),
+                "level_changed": bool(row.get("level_changed", False)),
+                "event": str(row["event"]),
+                "trend": trend,
+                "change_1d": nullable_float(row.get("change_1d")),
+                "change_5d": nullable_float(row.get("change_5d")),
+                "percentile_change_1d": nullable_float(
+                    row.get("percentile_change_1d")
+                ),
+                "percentile_change_5d": nullable_float(
+                    row.get("percentile_change_5d")
+                ),
+                "classification_quality": str(row["classification_quality"]),
+                "thresholds": {
+                    "extreme_calm": round(float(row["threshold_p05"]), 4),
+                    "calm": round(float(row["threshold_p25"]), 4),
+                    "panic": round(float(row["threshold_p75"]), 4),
+                    "extreme_panic": round(float(row["threshold_p95"]), 4),
+                },
+            },
             "components": {
                 "volatility": float(row["volatility"]),
                 "volatility_percent": float(row["volatility"]) * 100,
@@ -425,6 +455,18 @@ def nullable_number(value):
     if value is None or pd.isna(value):
         return None
     return int(value) if float(value).is_integer() else float(value)
+
+
+def nullable_float(value):
+    if value is None or pd.isna(value):
+        return None
+    return round(float(value), 4)
+
+
+def nullable_text(value):
+    if value is None or pd.isna(value):
+        return None
+    return str(value)
 
 
 def new_run_id() -> str:

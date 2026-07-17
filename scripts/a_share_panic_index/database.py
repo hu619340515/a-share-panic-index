@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 class Database:
@@ -57,7 +57,23 @@ class Database:
                 CREATE TABLE IF NOT EXISTS panic_index (
                     date TEXT PRIMARY KEY,
                     panic_index REAL NOT NULL,
+                    panic_percentile REAL NOT NULL,
                     status TEXT NOT NULL,
+                    emotion_level TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    classification_quality TEXT NOT NULL,
+                    threshold_p05 REAL NOT NULL,
+                    threshold_p25 REAL NOT NULL,
+                    threshold_p75 REAL NOT NULL,
+                    threshold_p95 REAL NOT NULL,
+                    change_1d REAL,
+                    change_5d REAL,
+                    percentile_change_1d REAL,
+                    percentile_change_5d REAL,
+                    trend TEXT NOT NULL,
+                    previous_level TEXT,
+                    level_changed INTEGER NOT NULL DEFAULT 0,
+                    event TEXT NOT NULL,
                     volatility REAL NOT NULL,
                     limit_ratio REAL NOT NULL,
                     limit_up INTEGER,
@@ -143,13 +159,38 @@ class Database:
                     connection.execute(
                         """
                         INSERT INTO panic_index(
-                            date, panic_index, status, volatility, limit_ratio,
-                            limit_up, limit_down, futures_basis, southbound_flow,
-                            quality_status, sources_json, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            date, panic_index, panic_percentile, status,
+                            emotion_level, model_version, classification_quality,
+                            threshold_p05, threshold_p25, threshold_p75,
+                            threshold_p95, change_1d, change_5d,
+                            percentile_change_1d, percentile_change_5d,
+                            trend, previous_level, level_changed, event,
+                            volatility, limit_ratio, limit_up, limit_down,
+                            futures_basis, southbound_flow, quality_status,
+                            sources_json, updated_at
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         ON CONFLICT(date) DO UPDATE SET
                             panic_index=excluded.panic_index,
+                            panic_percentile=excluded.panic_percentile,
                             status=excluded.status,
+                            emotion_level=excluded.emotion_level,
+                            model_version=excluded.model_version,
+                            classification_quality=excluded.classification_quality,
+                            threshold_p05=excluded.threshold_p05,
+                            threshold_p25=excluded.threshold_p25,
+                            threshold_p75=excluded.threshold_p75,
+                            threshold_p95=excluded.threshold_p95,
+                            change_1d=excluded.change_1d,
+                            change_5d=excluded.change_5d,
+                            percentile_change_1d=excluded.percentile_change_1d,
+                            percentile_change_5d=excluded.percentile_change_5d,
+                            trend=excluded.trend,
+                            previous_level=excluded.previous_level,
+                            level_changed=excluded.level_changed,
+                            event=excluded.event,
                             volatility=excluded.volatility,
                             limit_ratio=excluded.limit_ratio,
                             limit_up=excluded.limit_up,
@@ -163,7 +204,23 @@ class Database:
                         (
                             pd.Timestamp(index).strftime("%Y-%m-%d"),
                             float(row["panic_index"]),
+                            float(row["panic_percentile"]),
                             row["status"],
+                            row["status"],
+                            row["model_version"],
+                            row["classification_quality"],
+                            float(row["threshold_p05"]),
+                            float(row["threshold_p25"]),
+                            float(row["threshold_p75"]),
+                            float(row["threshold_p95"]),
+                            _nullable_float(row.get("change_1d")),
+                            _nullable_float(row.get("change_5d")),
+                            _nullable_float(row.get("percentile_change_1d")),
+                            _nullable_float(row.get("percentile_change_5d")),
+                            row["trend"],
+                            _nullable_text(row.get("previous_level")),
+                            int(bool(row.get("level_changed", False))),
+                            row["event"],
                             float(row["volatility"]),
                             float(row["limit_ratio"]),
                             _nullable_int(row.get("limit_up")),
@@ -181,6 +238,15 @@ class Database:
                     "INSERT OR REPLACE INTO metadata(key, value, updated_at) VALUES (?, ?, ?)",
                     ("last_successful_update", now, now),
                 )
+                if not panic_rows.empty:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO metadata(key, value, updated_at) VALUES (?, ?, ?)",
+                        (
+                            "emotion_model_version",
+                            str(panic_rows.iloc[-1]["model_version"]),
+                            now,
+                        ),
+                    )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -192,3 +258,15 @@ def _nullable_int(value):
     if value is None or pd.isna(value):
         return None
     return int(value)
+
+
+def _nullable_float(value):
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
+
+
+def _nullable_text(value):
+    if value is None or pd.isna(value):
+        return None
+    return str(value)

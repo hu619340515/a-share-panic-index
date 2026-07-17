@@ -6,7 +6,7 @@ alerts:
     smtp_server: smtp.example.com
     smtp_user: your_email@example.com
     to_email: recipient@example.com
-  enabled: true
+  enabled: false
   feishu:
     enabled: false
     secret: ''
@@ -14,15 +14,15 @@ alerts:
   rules:
     extreme_panic:
       condition: '>= 80'
-      message: 🔴 极度恐慌！恐慌指数达到 {index}，可能是买入时机
+      message: 🔴 极度恐慌观察！恐慌指数达到 {index}
       priority: high
     greedy:
       condition: <= 20
-      message: 🟢 极度贪婪！恐慌指数 {index}，注意风险
+      message: 🟢 市场压力极低！恐慌指数 {index}，关注过度平静风险
       priority: high
     panic:
       condition: '>= 60'
-      message: 🟠 恐慌情绪！恐慌指数 {index}，开始关注机会
+      message: 🟠 市场压力偏高！恐慌指数 {index}，关注风险变化
       priority: medium
   weixin:
     enabled: false
@@ -57,6 +57,23 @@ thresholds:
   neutral: 60
   optimistic: 40
   panic: 80
+emotion_model:
+  version: '2.0'
+  component_window: 504
+  min_periods: 252
+  short_threshold_window: 252
+  long_threshold_window: 756
+  short_weight: 0.3
+  long_weight: 0.7
+  smoothing_span: 20
+  quantiles:
+    extreme_calm: 0.05
+    calm: 0.25
+    panic: 0.75
+    extreme_panic: 0.95
+  trend:
+    fast_change_threshold: 10
+    slow_change_threshold: 3
 viz:
   dpi: 150
   figure_size:
@@ -73,7 +90,7 @@ weights:
 database:
   overlap_days: 40
   path: ./data_cache/panic_index.db
-  rebuild_days: 730
+  rebuild_days: 1100
 
 logging:
   directory: ./logs

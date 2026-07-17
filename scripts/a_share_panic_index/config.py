@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .emotion import DynamicEmotionClassifier
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
@@ -29,6 +32,7 @@ class Settings:
                 user_weights["volatility"] = user_weights["implied_volatility"]
             self._merge(self._config, user_config)
         self._normalize_compatibility()
+        self._validate()
 
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
@@ -53,6 +57,29 @@ class Settings:
         if "path" not in database and legacy_cache.get("sqlite_path"):
             database["path"] = legacy_cache["sqlite_path"]
 
+    def _validate(self) -> None:
+        try:
+            component_window = int(
+                self._config.get("emotion_model", {}).get("component_window", 504)
+            )
+            if component_window <= 0:
+                raise ValueError("指标滚动分位窗口必须为正整数")
+            DynamicEmotionClassifier(self._config.get("emotion_model", {}))
+
+            weights = self._config.get("weights", {})
+            values = [
+                float(weights.get("volatility", 0.40)),
+                float(weights.get("limit_up_down_ratio", 0.30)),
+                float(weights.get("futures_premium", 0.20)),
+                float(weights.get("southbound_flow", 0.10)),
+            ]
+            if any(not isfinite(value) or value < 0 for value in values):
+                raise ValueError("指标权重必须是有限的非负数")
+            if sum(values) <= 0:
+                raise ValueError("指标权重之和必须大于0")
+        except (TypeError, KeyError) as error:
+            raise ValueError(f"动态情绪配置无效: {error}") from error
+
     def section(self, name: str) -> dict[str, Any]:
         return deepcopy(self._config.get(name, {}))
 
@@ -63,6 +90,10 @@ class Settings:
     @property
     def thresholds(self) -> dict[str, float]:
         return self.section("thresholds")
+
+    @property
+    def emotion_model(self) -> dict[str, Any]:
+        return self.section("emotion_model")
 
     def resolve_path(self, value: str) -> Path:
         path = Path(value).expanduser()

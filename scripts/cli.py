@@ -125,7 +125,7 @@ def error_payload(run_id: str, exit_code: int, status: str, error: Exception, re
     now = parse_now() or datetime.now().astimezone()
     target = requested_date or now.date()
     return {
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "ok": False,
         "status": status,
         "exit_code": exit_code,
