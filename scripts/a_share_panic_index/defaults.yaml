@@ -1,0 +1,33 @@
+weights:
+  volatility: 0.40
+  limit_up_down_ratio: 0.30
+  futures_premium: 0.20
+  southbound_flow: 0.10
+
+thresholds:
+  greedy: 20
+  optimistic: 40
+  neutral: 60
+  panic: 80
+  extreme_panic: 100
+
+database:
+  path: ./data_cache/panic_index.db
+  rebuild_days: 730
+  overlap_days: 40
+
+market:
+  calendar: XSHG
+  timezone: Asia/Shanghai
+  data_ready_time: "15:30"
+
+network:
+  max_retries: 3
+  retry_delay: 2
+  provider_timeout: 30
+  total_timeout: 300
+
+logging:
+  directory: ./logs
+  retention_days: 30
+  level: INFO

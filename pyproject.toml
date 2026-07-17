@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py310']
 include = '\.pyi?$'
 extend-exclude = '''/(\n    \.git\n  | \.venv\n  | build\n  | dist\n  | data_cache\n  | docs\n)/'''
 
@@ -8,3 +8,9 @@ extend-exclude = '''/(\n    \.git\n  | \.venv\n  | build\n  | dist\n  | data_cac
 max-line-length = 88
 extend-ignore = ["E203", "W503"]
 select = ["E", "W", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: 需要真实网络的数据源集成测试",
+]

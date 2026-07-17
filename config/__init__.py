@@ -34,15 +34,28 @@ class Config:
     def _load_config(self) -> Dict[str, Any]:
         """加载YAML配置"""
         if not Path(self.config_path).exists():
-            return self._default_config()
+            config = self._default_config()
+            return self._normalize_compatibility(config)
 
         with open(self.config_path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f) or {}
+        return self._normalize_compatibility(config)
+
+    @staticmethod
+    def _normalize_compatibility(config: Dict[str, Any]) -> Dict[str, Any]:
+        """保留新旧波动率权重键的双向兼容。"""
+        weights = config.setdefault("weights", {})
+        if "volatility" in weights and "implied_volatility" not in weights:
+            weights["implied_volatility"] = weights["volatility"]
+        if "implied_volatility" in weights and "volatility" not in weights:
+            weights["volatility"] = weights["implied_volatility"]
+        return config
 
     def _default_config(self) -> Dict[str, Any]:
         """默认配置"""
         return {
             "weights": {
+                "volatility": 0.40,
                 "implied_volatility": 0.40,
                 "limit_up_down_ratio": 0.30,
                 "futures_premium": 0.20,

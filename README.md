@@ -38,7 +38,7 @@
 ### 安装依赖
 
 ```bash
-pip install akshare baostock pandas numpy matplotlib pyyaml requests
+pip install -r requirements.txt
 ```
 
 ### 使用CLI工具
@@ -50,6 +50,9 @@ cd a-share-panic-index
 # 获取当前恐慌指数
 python3 cli.py current
 
+# 生成单次结构化日报（Hermes/自动化推荐）
+python3 scripts/cli.py daily
+
 # 查看历史数据
 python3 cli.py history --days 30
 
@@ -59,9 +62,17 @@ python3 cli.py chart --type comprehensive --output chart.png
 # 运行回测
 python3 cli.py backtest
 
-# 监控模式
-python3 cli.py monitor
+# 指定日期或独立数据库
+python3 scripts/cli.py daily --date 2026-07-17 --database ./data_cache/panic_index.db
 ```
+
+`daily` 的标准输出只有一个UTF-8 JSON对象，日志写入标准错误和
+`logs/daily.log`。退出码 `0/2/3/4/5/6` 分别表示成功、配置错误、
+数据过期、指标不完整、计算或存储失败、未预期错误。
+
+系统按上交所交易日历判断目标日期，15:30后要求取得当日数据；主历史源
+尚未更新时会切换到当日备选源，并将结果标记为 `provisional`，后续运行
+自动使用主历史源复核覆盖。
 
 ### Python API
 
