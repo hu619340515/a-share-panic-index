@@ -126,6 +126,27 @@ class Database:
         result["sources"] = json.loads(result.pop("sources_json"))
         return result
 
+    def load_snapshots(self, days: int = 730) -> pd.DataFrame:
+        """按日期升序读取最近的指数快照，供历史图表和导出使用。"""
+
+        if days <= 0:
+            raise ValueError("图表天数必须为正整数")
+        with closing(sqlite3.connect(self.path)) as connection:
+            frame = pd.read_sql_query(
+                """
+                SELECT * FROM (
+                    SELECT * FROM panic_index ORDER BY date DESC LIMIT ?
+                ) ORDER BY date ASC
+                """,
+                connection,
+                params=(int(days),),
+                parse_dates=["date"],
+            )
+        if frame.empty:
+            return frame
+        frame.set_index("date", inplace=True)
+        return frame
+
     def persist(self, observations: pd.DataFrame, panic_rows: pd.DataFrame) -> dict[str, int]:
         now = datetime.now().isoformat()
         observation_count = 0

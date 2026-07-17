@@ -58,8 +58,12 @@ python3 scripts/cli.py daily
 # 查看历史数据
 python3 cli.py history --days 30
 
-# 生成图表
+# 生成最近120个交易日图表（默认跳过周末和休市日）
 python3 cli.py chart --type comprehensive --output chart.png
+
+# 使用独立配置和数据库生成指定交易日图表
+python3 cli.py chart --date 2026-07-17 --config config/settings.yaml \
+  --database ./data_cache/panic_index.db --output chart.png
 
 # 运行回测
 python3 cli.py backtest
@@ -79,25 +83,27 @@ python3 scripts/cli.py daily --date 2026-07-17 --database ./data_cache/panic_ind
 `result.emotion` 包含模型版本、历史分位、动态阈值、趋势和等级变化事件；
 `result.signal` 只提供观察提示，不直接输出买卖建议。
 
+`chart` 与 `daily` 使用同一套 v4 数据抓取、滚动分位计算和SQLite快照，
+不会再调用旧版 Min-Max 计算器。综合图会展示沪深300、动态情绪阈值、
+20日年化波动率、涨跌停家数和南向资金；缺失字段会显示明确提示。`--days`
+表示交易日数量，默认120；横轴连续排列交易日并标注真实日期，周末和休市日
+不会产生空白间隔。
+
 ### Python API
 
 ```python
-from core.calculator import PanicIndexCalculator
-from data.database import Database
+from pathlib import Path
+
+from scripts.a_share_panic_index.database import Database
 from viz.charts import Visualizer
 
-# 获取数据
-db = Database()
-df = db.get_latest(30)
-
-# 计算恐慌指数
-calc = PanicIndexCalculator()
-latest = df.iloc[-1]
-signal = calc.get_signal(latest['panic_index'])
+# 读取 daily 已计算并保存的 v4 快照
+db = Database(Path("data_cache/panic_index.db"))
+df = db.load_snapshots(90)
 
 # 生成图表
 viz = Visualizer()
-viz.plot_comprehensive(df, raw_data, 'output.png')
+viz.plot_comprehensive(df, {}, "output.png")
 ```
 
 ## 📁 项目结构
@@ -180,6 +186,13 @@ emotion_model:
     panic: 0.75
     extreme_panic: 0.95
 
+# 图表与中文字体
+viz:
+  dpi: 150
+  figure_size: [16, 24]
+  font_path: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  style: seaborn-v0_8-whitegrid
+
 # 告警配置
 alerts:
   enabled: true
@@ -214,6 +227,7 @@ python -m unittest discover -s tests -v
 - 历史滚动分位标准化和未来数据隔离
 - 长短周期动态阈值、EMA平滑和无滞回分级
 - 趋势、等级变化事件和数据库审计字段
+- v4 图表入口、动态阈值、中文字体和各子图字段兼容
 - 回测引擎
 - 配置管理
 
@@ -244,6 +258,13 @@ python -m unittest discover -s tests -v
 `daily` 只输出等级和变化事件。是否每天发送、只在等级变化时发送，或极端状态持续时重复提醒，由Hermes工作流配置，不在情绪模型中加入滞回或买卖规则。
 
 ## 📝 更新日志
+
+### v4.0.1 (2026-07-18)
+- ✅ 图表与日报统一使用 v4 数据库快照和动态分位模型
+- ✅ 修复 `volatility`/`hs300_close` 字段不兼容导致的空白子图
+- ✅ 增加微软雅黑、Noto CJK、黑体等跨平台中文字体探测
+- ✅ 默认展示最近120个交易日，并压缩周末和休市日空档
+- ✅ 补齐与当前实现一致的 README 示例图和图表回归测试
 
 ### v4.0.0 (2026-07-17)
 - ✅ 使用历史滚动分位替代全历史Min-Max标准化

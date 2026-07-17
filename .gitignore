@@ -40,6 +40,7 @@ data_cache/
 reports/
 *.png
 *.jpg
+!docs/images/*.png
 
 # Logs
 *.log

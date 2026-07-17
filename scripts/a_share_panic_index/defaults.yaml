@@ -49,3 +49,9 @@ logging:
   directory: ./logs
   retention_days: 30
   level: INFO
+
+viz:
+  dpi: 150
+  figure_size: [16, 24]
+  font_path: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  style: seaborn-v0_8-whitegrid

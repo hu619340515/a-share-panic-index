@@ -86,6 +86,39 @@ market:
             check=False,
         )
 
+    def run_chart(self, target_date: str, output_path: Path):
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PANIC_INDEX_FIXTURE_FILE": str(FIXTURE),
+                "PANIC_INDEX_DISABLE_SUBPROCESS": "1",
+                "PANIC_INDEX_NOW": f"{target_date}T16:00:00+08:00",
+                "PYTHONUTF8": "1",
+            }
+        )
+        return subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts/cli.py"),
+                "chart",
+                "--date",
+                target_date,
+                "--config",
+                str(self.config_path),
+                "--database",
+                str(self.database_path),
+                "--output",
+                str(output_path),
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=60,
+            check=False,
+        )
+
     def test_daily_outputs_single_json_and_persists_provisional_result(self):
         completed = self.run_daily("2026-07-17")
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -152,6 +185,19 @@ market:
         completed = self.run_daily("2026-07-17", root_entry=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["exit_code"], 0)
+
+    def test_chart_uses_v4_snapshots_and_writes_image(self):
+        output_path = self.temp_path / "恐慌指数图表.png"
+        completed = self.run_chart("2026-07-17", output_path)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(output_path.exists())
+        self.assertGreater(output_path.stat().st_size, 20_000)
+        self.assertIn("数据模型: v4", completed.stdout)
+        self.assertIn("交易日: 6/120", completed.stdout)
+
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            count = connection.execute("SELECT COUNT(*) FROM panic_index").fetchone()[0]
+        self.assertGreater(count, 0)
 
     def test_primary_history_reconciles_provisional_record(self):
         first = self.run_daily("2026-07-17")

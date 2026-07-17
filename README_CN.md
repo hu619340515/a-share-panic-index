@@ -19,6 +19,18 @@ python3 scripts/cli.py daily
 python3 cli.py current
 ```
 
+生成与日报使用同一套 v4 数据和动态分位模型的综合图：
+
+```bash
+python3 cli.py chart --type comprehensive --output chart.png
+```
+
+默认展示最近120个交易日。横轴仍显示真实日期，但只连续排列有效交易日，
+周末和交易所休市日不会占用横轴空间；可通过 `--days` 调整交易日数量。
+
+图表会自动探测 Windows 微软雅黑、Linux Noto CJK 等中文字体；服务器环境也可
+通过 `viz.font_path` 或 `PANIC_INDEX_FONT_PATH` 指定字体文件。
+
 ## 配置
 
 复制 `config/settings.yaml` 并根据需要修改。
@@ -32,7 +44,7 @@ python3 cli.py current
 - 分级无滞回；等级变化通过 `result.emotion.event` 输出，通知频率由Hermes处理。
 - `result.signal` 只输出观察信号，不直接输出买入或卖出建议。
 
-首次V2运行会备份旧数据库，并重建约1100个自然日数据。历史不足252个交易日时，`classification_quality` 为 `warming_up`。
+首次 v4 运行会备份旧数据库，并重建约1100个自然日数据。历史不足252个交易日时，`classification_quality` 为 `warming_up`。
 
 运行测试：
 

@@ -55,7 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     history_parser.add_argument("--days", "-d", type=int, default=30)
 
     chart_parser = subparsers.add_parser("chart", help="生成图表")
-    chart_parser.add_argument("--days", "-d", type=int, default=730)
+    chart_parser.add_argument(
+        "--days", "-d", type=int, default=120, help="显示最近N个交易日（默认120）"
+    )
     chart_parser.add_argument(
         "--type",
         "-t",
@@ -63,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="comprehensive",
     )
     chart_parser.add_argument("--output", "-o", default="panic_chart.png")
+    chart_parser.add_argument("--date", type=parse_date, help="刷新到指定交易日 YYYY-MM-DD")
+    chart_parser.add_argument("--force-refresh", action="store_true", help="强制重建历史窗口")
+    chart_parser.add_argument("--config", help="配置文件路径")
+    chart_parser.add_argument("--database", help="SQLite数据库路径")
 
     subparsers.add_parser("backtest", help="运行回测")
     subparsers.add_parser("alert", help="测试告警")
@@ -172,9 +178,9 @@ def run_legacy(args) -> int:
 
         cmd_history(args)
     elif args.command == "chart":
-        from cli.commands.chart import cmd_chart
+        from a_share_panic_index.charting import run_chart
 
-        cmd_chart(args)
+        return run_chart(args, now=parse_now())
     elif args.command == "backtest":
         from cli.commands.backtest import cmd_backtest
 
