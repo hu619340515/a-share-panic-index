@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 
-SCHEMA_VERSION = "4"
+DB_SCHEMA_VERSION = "4"
 
 
 class Database:
@@ -29,7 +29,7 @@ class Database:
                     row = connection.execute(
                         "SELECT value FROM metadata WHERE key='schema_version'"
                     ).fetchone()
-                if row and row[0] == SCHEMA_VERSION:
+                if row and row[0] == DB_SCHEMA_VERSION:
                     return
             except sqlite3.Error:
                 pass
@@ -97,7 +97,7 @@ class Database:
             now = datetime.now().isoformat()
             connection.execute(
                 "INSERT OR REPLACE INTO metadata(key, value, updated_at) VALUES (?, ?, ?)",
-                ("schema_version", SCHEMA_VERSION, now),
+                ("schema_version", DB_SCHEMA_VERSION, now),
             )
             connection.commit()
 

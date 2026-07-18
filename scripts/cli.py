@@ -19,6 +19,8 @@ if str(SCRIPT_ROOT) not in sys.path:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from a_share_panic_index import APP_VERSION
+from a_share_panic_index.chart import ChartDataError, generate_chart
 from a_share_panic_index.config import Settings
 from a_share_panic_index.logging_utils import configure_logging
 from a_share_panic_index.runner import DailyRunner
@@ -44,33 +46,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(description="A股恐慌指数自动化工具")
     subparsers = parser.add_subparsers(dest="command")
 
-    for command, help_text in (("daily", "单次生成结构化日报"), ("current", "显示当前恐慌指数")):
+    for command, help_text in (
+        ("daily", "单次生成结构化日报"),
+        ("current", "显示当前市场压力指数"),
+    ):
         command_parser = subparsers.add_parser(command, help=help_text)
-        command_parser.add_argument("--date", type=parse_date, help="指定交易日 YYYY-MM-DD")
-        command_parser.add_argument("--force-refresh", action="store_true", help="强制重建历史窗口")
+        command_parser.add_argument(
+            "--date", type=parse_date, help="指定交易日 YYYY-MM-DD"
+        )
+        command_parser.add_argument(
+            "--force-refresh", action="store_true", help="强制重建历史窗口"
+        )
         command_parser.add_argument("--config", help="配置文件路径")
         command_parser.add_argument("--database", help="SQLite数据库路径")
 
-    history_parser = subparsers.add_parser("history", help="查看历史数据")
-    history_parser.add_argument("--days", "-d", type=int, default=30)
-
-    chart_parser = subparsers.add_parser("chart", help="生成图表")
-    chart_parser.add_argument("--days", "-d", type=int, default=730)
-    chart_parser.add_argument(
-        "--type",
-        "-t",
-        choices=["simple", "comprehensive", "comparison"],
-        default="comprehensive",
-    )
-    chart_parser.add_argument("--output", "-o", default="panic_chart.png")
-
-    subparsers.add_parser("backtest", help="运行回测")
-    subparsers.add_parser("alert", help="测试告警")
-    config_parser = subparsers.add_parser("config", help="配置管理")
-    config_parser.add_argument("action", choices=["get", "set", "list"])
-    config_parser.add_argument("key", nargs="?")
-    config_parser.add_argument("value", nargs="?")
-    subparsers.add_parser("monitor", help="监控模式")
+    chart_parser = subparsers.add_parser("chart", help="生成动态模型图表")
+    chart_parser.add_argument("--config", help="配置文件路径")
+    chart_parser.add_argument("--database", help="SQLite数据库路径")
+    chart_parser.add_argument("--output", "-o", default="reports/panic_index.png")
+    chart_parser.add_argument("--days", "-d", type=int, default=252)
+    chart_parser.add_argument("--dpi", type=int, default=160)
     return parser
 
 
@@ -86,24 +81,34 @@ def parse_now() -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
 
+def resolve_database_path(settings: Settings, override: str | None) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    database_config = settings.section("database")
+    return settings.resolve_path(database_config.get("path", "./data_cache/panic_index.db"))
+
+
+def build_logger(settings: Settings, run_id: str):
+    logging_config = settings.section("logging")
+    log_directory = settings.resolve_path(logging_config.get("directory", "./logs"))
+    return configure_logging(
+        log_directory,
+        int(logging_config.get("retention_days", 30)),
+        logging_config.get("level", "INFO"),
+        run_id,
+    )
+
+
+def write_json(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
 def run_daily(args, human: bool = False) -> int:
     run_id = str(uuid4())
     try:
         settings = Settings(args.config)
-        database_config = settings.section("database")
-        database_path = (
-            Path(args.database).expanduser().resolve()
-            if args.database
-            else settings.resolve_path(database_config.get("path", "./data_cache/panic_index.db"))
-        )
-        logging_config = settings.section("logging")
-        log_directory = settings.resolve_path(logging_config.get("directory", "./logs"))
-        logger = configure_logging(
-            log_directory,
-            int(logging_config.get("retention_days", 30)),
-            logging_config.get("level", "INFO"),
-            run_id,
-        )
+        database_path = resolve_database_path(settings, args.database)
+        logger = build_logger(settings, run_id)
         runner = DailyRunner(settings, database_path, logger, now=parse_now())
         result = runner.run(run_id, args.date, args.force_refresh)
     except (FileNotFoundError, ValueError) as error:
@@ -117,15 +122,103 @@ def run_daily(args, human: bool = False) -> int:
     if human:
         render_human(payload)
     else:
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        write_json(payload)
     return int(payload["exit_code"])
 
 
-def error_payload(run_id: str, exit_code: int, status: str, error: Exception, requested_date):
+def run_chart(args) -> int:
+    run_id = str(uuid4())
+    generated_at = (parse_now() or datetime.now().astimezone()).isoformat()
+    logger = None
+    try:
+        settings = Settings(args.config)
+        database_path = resolve_database_path(settings, args.database)
+        logger = build_logger(settings, run_id)
+        output_path = Path(args.output).expanduser().resolve()
+        logger.info(
+            "chart开始 database=%s output=%s days=%s dpi=%s",
+            database_path,
+            output_path,
+            args.days,
+            args.dpi,
+        )
+        chart = generate_chart(database_path, output_path, args.days, args.dpi)
+        logger.info(
+            "chart完成 as_of_date=%s output=%s",
+            chart["as_of_date"],
+            chart["output"],
+        )
+        payload = chart_payload(run_id, generated_at, True, "chart_success", 0, chart)
+    except (FileNotFoundError, ValueError) as error:
+        payload = chart_error_payload(run_id, generated_at, 2, "configuration_error", error)
+    except ChartDataError as error:
+        payload = chart_error_payload(run_id, generated_at, 4, "chart_data_invalid", error)
+    except sqlite3.Error as error:
+        payload = chart_error_payload(run_id, generated_at, 5, "chart_storage_failed", error)
+    except (ImportError, OSError) as error:
+        payload = chart_error_payload(run_id, generated_at, 5, "chart_generation_failed", error)
+    except Exception as error:
+        payload = chart_error_payload(run_id, generated_at, 6, "unexpected_error", error)
+    if logger is not None and not payload["ok"]:
+        logger.error(
+            "chart失败 status=%s error=%s",
+            payload["status"],
+            payload["errors"][0]["message"],
+        )
+    write_json(payload)
+    return int(payload["exit_code"])
+
+
+def chart_payload(
+    run_id: str,
+    generated_at: str,
+    ok: bool,
+    status: str,
+    exit_code: int,
+    chart: dict | None,
+    errors: list[dict] | None = None,
+) -> dict:
+    return {
+        "schema_version": APP_VERSION,
+        "ok": ok,
+        "status": status,
+        "exit_code": exit_code,
+        "run_id": run_id,
+        "generated_at": generated_at,
+        "chart": chart,
+        "errors": errors or [],
+    }
+
+
+def chart_error_payload(
+    run_id: str,
+    generated_at: str,
+    exit_code: int,
+    status: str,
+    error: Exception,
+) -> dict:
+    return chart_payload(
+        run_id,
+        generated_at,
+        False,
+        status,
+        exit_code,
+        None,
+        [{"type": type(error).__name__, "message": str(error)}],
+    )
+
+
+def error_payload(
+    run_id: str,
+    exit_code: int,
+    status: str,
+    error: Exception,
+    requested_date,
+):
     now = parse_now() or datetime.now().astimezone()
     target = requested_date or now.date()
     return {
-        "schema_version": "2.0",
+        "schema_version": APP_VERSION,
         "ok": False,
         "status": status,
         "exit_code": exit_code,
@@ -154,44 +247,16 @@ def render_human(payload: dict) -> None:
         return
     components = result["components"]
     print("=" * 50)
-    print("📊 A股恐慌指数")
+    print("A股市场压力指数")
     print("=" * 50)
     print(f"日期: {payload['as_of_date']}")
-    print(f"恐慌指数: {result['panic_index']:.2f} ({result['status']})")
+    print(f"压力指数: {result['panic_index']:.2f} ({result['status']})")
     print(f"波动率: {components['volatility_percent']:.2f}%")
     print(f"涨跌停比: {components['limit_ratio'] * 100:.1f}%")
-    print(f"操作建议: {result['signal']['reason']}")
+    print(f"观察提示: {result['signal']['reason']}")
     if payload.get("quality_status") == "provisional":
         print("数据质量: 临时数据，后续将自动复核")
     print("=" * 50)
-
-
-def run_legacy(args) -> int:
-    if args.command == "history":
-        from cli.commands.history import cmd_history
-
-        cmd_history(args)
-    elif args.command == "chart":
-        from cli.commands.chart import cmd_chart
-
-        cmd_chart(args)
-    elif args.command == "backtest":
-        from cli.commands.backtest import cmd_backtest
-
-        cmd_backtest(args)
-    elif args.command == "alert":
-        from cli.commands.alert import cmd_alert
-
-        cmd_alert(args)
-    elif args.command == "config":
-        from cli.commands.config import cmd_config
-
-        cmd_config(args)
-    elif args.command == "monitor":
-        from cli.commands.monitor import cmd_monitor
-
-        cmd_monitor(args)
-    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -200,8 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
     except CliArgumentError as error:
-        payload = error_payload(str(uuid4()), 2, "argument_error", error, None)
-        sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        write_json(error_payload(str(uuid4()), 2, "argument_error", error, None))
         return 2
     if args.command is None:
         parser.print_help()
@@ -210,7 +274,9 @@ def main(argv: list[str] | None = None) -> int:
         return run_daily(args, human=False)
     if args.command == "current":
         return run_daily(args, human=True)
-    return run_legacy(args)
+    if args.command == "chart":
+        return run_chart(args)
+    raise AssertionError(f"未处理的命令: {args.command}")
 
 
 if __name__ == "__main__":

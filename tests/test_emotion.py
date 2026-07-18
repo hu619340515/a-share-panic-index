@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from pandas.testing import assert_series_equal
 
+from scripts.a_share_panic_index import APP_VERSION
 from scripts.a_share_panic_index.calculator import PanicIndexCalculator
 from scripts.a_share_panic_index.database import Database
 from scripts.a_share_panic_index.emotion import (
@@ -182,7 +183,6 @@ class TestPanicScore(unittest.TestCase):
 class TestDynamicThresholds(unittest.TestCase):
     def setUp(self):
         self.config = {
-            "version": "2.0-test",
             "min_periods": 3,
             "short_threshold_window": 2,
             "long_threshold_window": 4,
@@ -213,6 +213,7 @@ class TestDynamicThresholds(unittest.TestCase):
         expected = 0.3 * short_p95 + 0.7 * long_p95
         self.assertAlmostEqual(result.iloc[-1]["threshold_p95"], expected)
         self.assertEqual(result.iloc[-1]["classification_quality"], "final")
+        self.assertEqual(result.iloc[-1]["model_version"], APP_VERSION)
 
     def test_current_score_does_not_change_its_threshold(self):
         index = pd.bdate_range("2026-07-01", periods=5)
@@ -296,7 +297,6 @@ class TestDynamicThresholds(unittest.TestCase):
             index=pd.bdate_range("2021-01-01", periods=len(scores)),
         )
         config = {
-            "version": "2.0-test",
             "min_periods": 252,
             "short_threshold_window": 252,
             "long_threshold_window": 756,
@@ -325,6 +325,7 @@ class TestEmotionSettings(unittest.TestCase):
         self.assertEqual(model["long_threshold_window"], 756)
         self.assertEqual(model["smoothing_span"], 20)
         self.assertEqual(model["quantiles"]["extreme_panic"], 0.95)
+        self.assertNotIn("version", model)
         self.assertEqual(database["rebuild_days"], 1100)
 
 
@@ -350,7 +351,7 @@ class TestEmotionDatabase(unittest.TestCase):
                         "panic_index": 96.0,
                         "panic_percentile": 98.0,
                         "status": "极度恐慌",
-                        "model_version": "2.0",
+                        "model_version": APP_VERSION,
                         "classification_quality": "final",
                         "threshold_p05": 20.0,
                         "threshold_p25": 30.0,
@@ -377,7 +378,7 @@ class TestEmotionDatabase(unittest.TestCase):
             database.persist(observations, panic_rows)
             snapshot = database.latest_snapshot()
 
-            self.assertEqual(snapshot["model_version"], "2.0")
+            self.assertEqual(snapshot["model_version"], APP_VERSION)
             self.assertEqual(snapshot["emotion_level"], "极度恐慌")
             self.assertEqual(snapshot["event"], "entered_extreme_panic")
             self.assertEqual(snapshot["threshold_p95"], 90.0)
@@ -385,7 +386,7 @@ class TestEmotionDatabase(unittest.TestCase):
                 version = connection.execute(
                     "SELECT value FROM metadata WHERE key='emotion_model_version'"
                 ).fetchone()[0]
-            self.assertEqual(version, "2.0")
+            self.assertEqual(version, APP_VERSION)
 
 
 if __name__ == "__main__":

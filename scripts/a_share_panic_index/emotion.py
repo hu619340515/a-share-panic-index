@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from . import APP_VERSION
+
 
 DEFAULT_QUANTILES = {
     "extreme_calm": 0.05,
@@ -55,7 +57,7 @@ class DynamicEmotionClassifier:
 
     def __init__(self, config: Mapping[str, Any] | None = None):
         config = dict(config or {})
-        self.model_version = str(config.get("version", "2.0"))
+        self.model_version = APP_VERSION
         self.min_periods = int(config.get("min_periods", 252))
         self.short_window = int(config.get("short_threshold_window", 252))
         self.long_window = int(config.get("long_threshold_window", 756))

@@ -86,6 +86,40 @@ market:
             check=False,
         )
 
+    def run_chart(
+        self,
+        root_entry: bool = False,
+        database_path: Path | None = None,
+        output_path: Path | None = None,
+        extra_arguments: list[str] | None = None,
+    ):
+        entry = PROJECT_ROOT / ("cli.py" if root_entry else "scripts/cli.py")
+        command = [
+            sys.executable,
+            str(entry),
+            "chart",
+            "--config",
+            str(self.config_path),
+            "--database",
+            str(database_path or self.database_path),
+            "--output",
+            str(output_path or self.temp_path / "市场压力指数.png"),
+            "--days",
+            "252",
+            "--dpi",
+            "100",
+        ]
+        command.extend(extra_arguments or [])
+        return subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
+
     def test_daily_outputs_single_json_and_persists_provisional_result(self):
         completed = self.run_daily("2026-07-17")
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -152,6 +186,70 @@ market:
         completed = self.run_daily("2026-07-17", root_entry=True)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["exit_code"], 0)
+
+    def test_chart_uses_only_current_dynamic_model(self):
+        daily = self.run_daily("2026-07-17")
+        self.assertEqual(daily.returncode, 0, daily.stderr)
+        output_path = self.temp_path / "中文路径" / "市场压力指数.png"
+
+        completed = self.run_chart(root_entry=True, output_path=output_path)
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["schema_version"], "2.0")
+        self.assertEqual(payload["status"], "chart_success")
+        self.assertEqual(payload["chart"]["model_version"], "2.0")
+        self.assertEqual(payload["chart"]["output"], str(output_path.resolve()))
+        self.assertEqual(output_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertIn("chart开始", completed.stderr)
+
+    def test_chart_rejects_missing_or_legacy_database(self):
+        missing = self.run_chart(database_path=self.temp_path / "missing.db")
+        self.assertEqual(missing.returncode, 4)
+        self.assertEqual(json.loads(missing.stdout)["status"], "chart_data_invalid")
+
+        legacy_database = self.temp_path / "legacy.db"
+        with closing(sqlite3.connect(legacy_database)) as connection:
+            connection.execute("CREATE TABLE panic_index(date TEXT PRIMARY KEY)")
+            connection.commit()
+        legacy = self.run_chart(database_path=legacy_database)
+        self.assertEqual(legacy.returncode, 4)
+        self.assertIn("V4", json.loads(legacy.stdout)["errors"][0]["message"])
+
+        daily = self.run_daily("2026-07-17")
+        self.assertEqual(daily.returncode, 0, daily.stderr)
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            connection.execute("UPDATE panic_index SET model_version='1.0'")
+            connection.commit()
+        old_model = self.run_chart()
+        self.assertEqual(old_model.returncode, 4)
+        self.assertIn(
+            "非当前模型版本",
+            json.loads(old_model.stdout)["errors"][0]["message"],
+        )
+
+    def test_chart_rejects_removed_legacy_type_option(self):
+        completed = self.run_chart(extra_arguments=["--type", "comprehensive"])
+        self.assertEqual(completed.returncode, 2)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "argument_error")
+
+    def test_importing_cli_does_not_import_matplotlib(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import scripts.cli; print('matplotlib' in sys.modules)",
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stdout.strip(), "False")
 
     def test_primary_history_reconciles_provisional_record(self):
         first = self.run_daily("2026-07-17")

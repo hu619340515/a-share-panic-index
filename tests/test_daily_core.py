@@ -21,7 +21,7 @@ import pandas as pd
 from scripts.a_share_panic_index.calculator import PanicIndexCalculator
 from scripts.a_share_panic_index.calendar import TradingCalendar
 from scripts.a_share_panic_index.config import Settings
-from scripts.a_share_panic_index.database import Database, SCHEMA_VERSION
+from scripts.a_share_panic_index.database import Database, DB_SCHEMA_VERSION
 from scripts.a_share_panic_index.providers import (
     ProviderError,
     ProviderExecutor,
@@ -122,7 +122,7 @@ class TestDatabase(unittest.TestCase):
                 version = connection.execute(
                     "SELECT value FROM metadata WHERE key='schema_version'"
                 ).fetchone()[0]
-            self.assertEqual(version, SCHEMA_VERSION)
+            self.assertEqual(version, DB_SCHEMA_VERSION)
 
     def test_transaction_rolls_back_raw_observations(self):
         with tempfile.TemporaryDirectory() as directory:

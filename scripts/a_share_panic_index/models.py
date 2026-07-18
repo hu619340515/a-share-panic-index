@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from . import APP_VERSION
+
 
 REQUIRED_METRICS = (
     "volatility",
@@ -61,7 +63,7 @@ class RunResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "2.0",
+            "schema_version": APP_VERSION,
             "ok": self.ok,
             "status": self.status,
             "exit_code": self.exit_code,

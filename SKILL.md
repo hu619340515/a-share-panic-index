@@ -1,28 +1,27 @@
 ---
 name: a-share-panic-index
-description: 生成A股市场压力指数结构化日报，执行交易日判断、增量取数、多数据源回退、动态分位情绪分级、数据新鲜度校验和SQLite持久化。用户询问A股市场压力、恐慌程度、当日风险观察信号或需要自动化日报时使用此技能。
+description: 生成A股市场压力指数结构化日报和当前动态阈值图表，执行交易日判断、增量取数、多数据源回退、数据新鲜度校验与SQLite持久化。用户询问A股市场压力、恐慌程度、当日风险观察信号、自动化日报或需要压力指数图表时使用。
 ---
 
-# A股恐慌指数
+# A股市场压力指数
 
-## 准备环境
+## 固定入口
 
-在技能目录执行：
+只调用 `scripts/cli.py`。项目只有动态模型 `2.0`，不要查找、选择或调用其他版本，也不要传入旧参数 `--type`。
+
+在技能目录安装依赖：
 
 ```bash
-python3 -m pip install -r scripts/requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ## 生成日报
-
-执行：
 
 ```bash
 python3 scripts/cli.py daily
 ```
 
-命令最长允许运行300秒。标准输出只有一个UTF-8 JSON对象；将标准错误视为运行日志，不要与JSON拼接解析。
-当前日报JSON的 `schema_version` 为 `2.0`。
+最长等待 300 秒。标准输出只解析为一个 UTF-8 JSON 对象；标准错误是日志，不要与 JSON 拼接。
 
 可选参数：
 
@@ -34,27 +33,38 @@ python3 scripts/cli.py daily \
   --force-refresh
 ```
 
-## 处理结果
+向用户展示 `result.panic_index`、`result.status`、`result.emotion.percentile`、`result.emotion.trend`、`result.signal.reason`、`as_of_date` 和 `quality_status`。
 
-- `exit_code=0`：成功、非交易日跳过或盘前返回上一交易日快照。
-- `exit_code=2`：参数或配置错误。
-- `exit_code=3`：目标交易日数据过期；读取 `retry.after_seconds` 后重试。
-- `exit_code=4`：四项必需指标没有完整对齐，不要把结果当作有效日报。
-- `exit_code=5`：计算或数据库事务失败。
-- `exit_code=6`：未预期错误。
-- `quality_status=provisional`：使用了当日备选数据源；可以展示，但需要提示后续会自动复核。
-- `result.emotion.classification_quality=warming_up`：历史不足252个交易日，分级使用扩展窗口，可信度低于正式模型。
-- `result=null`：没有可展示的有效快照。
+## 生成图表
 
-向用户展示 `result.panic_index`、`result.status`、`result.emotion.percentile`、`result.emotion.trend`、`result.signal.reason`、`as_of_date` 和 `quality_status`。`result.signal` 只提供观察提示，不是买卖建议。如果 `ok=false` 但 `result` 不为空，可将其作为上一交易日备选快照，同时明确说明数据未更新。
+画图前先执行一次 `daily`，并使用同一个数据库路径。只有当 `daily` 返回退出码 `0` 且存在可用快照时才继续：
+
+```bash
+python3 scripts/cli.py chart \
+  --database /path/to/panic_index.db \
+  --output reports/panic_index.png \
+  --days 252 \
+  --dpi 160
+```
+
+标准输出仍是单个 JSON 对象。成功时读取 `chart.output` 作为要发送的 PNG；`chart.model_version` 必须为 `2.0`。图表直接读取当前 V4 数据库，不会重新运行旧计算器。
+
+禁止调用已删除的 `cli.commands.chart`、`viz.charts`、`core.calculator`、`history`、`backtest`、`alert` 或 `monitor`。
+
+## 处理退出码
+
+- `0`：成功、非交易日跳过或盘前返回上一交易日快照。
+- `2`：参数或配置错误，不要使用旧命令或旧图表参数重试。
+- `3`：目标交易日数据过期，等待 `retry.after_seconds` 后重试。
+- `4`：四项指标不完整，或图表数据库不是当前模型；先重新运行 `daily`。
+- `5`：计算、存储或图表生成失败。
+- `6`：未预期错误。
+
+`quality_status=provisional` 表示使用当日备选数据源，可以展示，但要提示后续会自动复核。`result.signal` 只提供风险观察提示，不是买卖建议。
 
 ## 数据约定
 
-- 波动率内部单位为年化小数；展示百分比时使用 `result.components.volatility_percent`。
-- 四项必需指标为波动率、涨跌停比、期货基差和南向资金。
-- 四项指标使用此前最多504个交易日计算历史分位；当天数据不参与当天标准化和阈值。
-- 情绪阈值由252日和756日历史分位按30%和70%混合，再使用EMA20平滑。
-- 情绪等级为极度平静、偏平静、中性、偏恐慌和极度恐慌，不使用滞回机制。
-- `result.emotion.event` 只描述等级变化，消息去重和重复提醒由 Hermes 工作流处理。
-- 默认数据库位于 `data_cache/panic_index.db`，首次升级会先备份旧库再重建。
-- 日志写入 `logs/daily.log`，按天轮转并保留30天。
+- 波动率内部单位为年化小数；展示使用 `result.components.volatility_percent`。
+- 四项必需指标为波动率、涨跌停比、期货基差和南向资金，缺一项不生成当日指数。
+- 情绪等级使用 P05/P25/P75/P95 动态阈值，不使用固定 20/40/60/80 阈值，也不使用滞回机制。
+- 日志写入 `logs/daily.log`，按天轮转并默认保留 30 天。
