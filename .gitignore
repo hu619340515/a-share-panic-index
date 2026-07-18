@@ -42,7 +42,9 @@ reports/
 *.jpg
 
 # Logs
+logs/
 *.log
+*.log.*
 
 # OS
 .DS_Store
