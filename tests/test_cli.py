@@ -10,12 +10,14 @@ import sys
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 from scripts.a_share_panic_index import APP_VERSION
-from scripts.a_share_panic_index.chart import DEFAULT_CHART_DAYS, load_chart_data
+from scripts.a_share_panic_index.calendar import TradingCalendar
+from scripts.a_share_panic_index.chart import DEFAULT_CHART_PERIOD
 from scripts.a_share_panic_index.database import DB_SCHEMA_VERSION
 
 
@@ -98,6 +100,7 @@ market:
         database_path: Path | None = None,
         output_path: Path | None = None,
         extra_arguments: list[str] | None = None,
+        days: int | None = 120,
     ):
         entry = PROJECT_ROOT / ("cli.py" if root_entry else "scripts/cli.py")
         command = [
@@ -110,11 +113,11 @@ market:
             str(database_path or self.database_path),
             "--output",
             str(output_path or self.temp_path / "市场压力指数.png"),
-            "--days",
-            "120",
             "--dpi",
             "100",
         ]
+        if days is not None:
+            command.extend(["--days", str(days)])
         command.extend(extra_arguments or [])
         environment = os.environ.copy()
         environment["PANIC_INDEX_NOW"] = "2026-07-18T10:00:00+08:00"
@@ -273,6 +276,20 @@ market:
         self.assertEqual(payload["retry"]["after_seconds"], 900)
         self.assertFalse(output_path.exists())
 
+    def test_chart_default_period_rejects_incomplete_year_history(self):
+        daily = self.run_daily("2026-07-17")
+        self.assertEqual(daily.returncode, 0, daily.stderr)
+        output_path = self.temp_path / "incomplete-year.png"
+        output_path.write_bytes(b"old chart")
+
+        completed = self.run_chart(output_path=output_path, days=None)
+
+        self.assertEqual(completed.returncode, 4)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "chart_data_invalid")
+        self.assertIn("近1年历史覆盖不足", payload["errors"][0]["message"])
+        self.assertFalse(output_path.exists())
+
     def test_chart_rejects_removed_legacy_type_option(self):
         completed = self.run_chart(extra_arguments=["--type", "comprehensive"])
         self.assertEqual(completed.returncode, 2)
@@ -295,9 +312,13 @@ market:
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), "False")
 
-    def test_chart_default_period_is_120_trading_records(self):
+    def test_chart_default_period_uses_actual_one_year_sessions(self):
         database_path = self.temp_path / "period.db"
-        dates = pd.bdate_range("2026-01-01", periods=130)
+        calendar = TradingCalendar("XSHG", "Asia/Shanghai", "15:30")
+        sessions = calendar.sessions_in_range(
+            date(2025, 7, 17),
+            date(2026, 7, 17),
+        )
         with closing(sqlite3.connect(database_path)) as connection:
             connection.execute(
                 "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT)"
@@ -339,17 +360,21 @@ market:
                         95.0,
                         "final",
                     )
-                    for position, timestamp in enumerate(dates)
+                    for position, session in enumerate(sessions)
+                    for timestamp in [pd.Timestamp(session)]
                 ],
             )
             connection.commit()
 
-        frame = load_chart_data(database_path, DEFAULT_CHART_DAYS)
+        completed = self.run_chart(database_path=database_path, days=None)
 
-        self.assertEqual(DEFAULT_CHART_DAYS, 120)
-        self.assertEqual(len(frame), 120)
-        self.assertEqual(frame.iloc[0]["date"], dates[10])
-        self.assertTrue(all(timestamp.weekday() < 5 for timestamp in frame["date"]))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["chart"]["period"], DEFAULT_CHART_PERIOD)
+        self.assertIsNone(payload["chart"]["days"])
+        self.assertEqual(payload["chart"]["trading_days"], len(sessions))
+        self.assertEqual(payload["chart"]["period_start_date"], "2025-07-17")
+        self.assertEqual(payload["chart"]["coverage_start_date"], "2025-07-17")
 
     def test_primary_history_reconciles_provisional_record(self):
         first = self.run_daily("2026-07-17")

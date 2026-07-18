@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from a_share_panic_index import APP_VERSION
 from a_share_panic_index.calendar import TradingCalendar
 from a_share_panic_index.chart import (
-    DEFAULT_CHART_DAYS,
+    DEFAULT_CHART_PERIOD,
     ChartDataError,
     ChartStaleError,
     generate_chart,
@@ -70,7 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     chart_parser.add_argument("--config", help="配置文件路径")
     chart_parser.add_argument("--database", help="SQLite数据库路径")
     chart_parser.add_argument("--output", "-o", default="reports/panic_index.png")
-    chart_parser.add_argument("--days", "-d", type=int, default=DEFAULT_CHART_DAYS)
+    chart_parser.add_argument(
+        "--days",
+        "-d",
+        type=int,
+        default=None,
+        help="可选覆盖；默认显示近1年实际交易记录",
+    )
     chart_parser.add_argument("--dpi", type=int, default=160)
     return parser
 
@@ -85,6 +91,13 @@ def parse_date(value: str) -> date:
 def parse_now() -> datetime | None:
     value = os.environ.get("PANIC_INDEX_NOW")
     return datetime.fromisoformat(value) if value else None
+
+
+def previous_year(value: date) -> date:
+    try:
+        return value.replace(year=value.year - 1)
+    except ValueError:
+        return value.replace(year=value.year - 1, day=28)
 
 
 def resolve_database_path(settings: Settings, override: str | None) -> Path:
@@ -149,10 +162,20 @@ def run_chart(args) -> int:
             market.get("data_ready_time", "15:30"),
         )
         context = calendar.context(now=now)
+        period_start_date = None
+        period_type = "trading_days"
+        if args.days is None:
+            candidate = previous_year(context.expected_trade_date)
+            sessions = calendar.sessions_in_range(candidate, context.expected_trade_date)
+            if not sessions:
+                raise ValueError("近1年范围内没有可用交易日")
+            period_start_date = sessions[0]
+            period_type = DEFAULT_CHART_PERIOD
         logger.info(
-            "chart开始 database=%s output=%s days=%s dpi=%s requested=%s expected=%s",
+            "chart开始 database=%s output=%s period=%s days=%s dpi=%s requested=%s expected=%s",
             database_path,
             output_path,
+            period_type,
             args.days,
             args.dpi,
             context.requested_date,
@@ -161,11 +184,13 @@ def run_chart(args) -> int:
         chart = generate_chart(
             database_path,
             output_path,
-            args.days,
-            args.dpi,
+            days=args.days,
+            dpi=args.dpi,
             requested_date=context.requested_date,
             expected_trade_date=context.expected_trade_date,
             market_status=context.status,
+            period_start_date=period_start_date,
+            period_type=period_type,
         )
         logger.info(
             "chart完成 as_of_date=%s output=%s",

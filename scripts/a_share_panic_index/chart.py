@@ -19,7 +19,7 @@ from .database import DB_SCHEMA_VERSION
 
 
 CHART_LAYOUT_VERSION = "2-panel-trading-sessions-v1"
-DEFAULT_CHART_DAYS = 120
+DEFAULT_CHART_PERIOD = "trailing_1_year"
 
 REQUIRED_COLUMNS = {
     "date",
@@ -94,15 +94,17 @@ class ChartStaleError(RuntimeError):
 def generate_chart(
     database_path: Path,
     output_path: Path,
-    days: int = DEFAULT_CHART_DAYS,
+    days: int | None = None,
     dpi: int = 160,
     requested_date: date | None = None,
     expected_trade_date: date | None = None,
     market_status: str | None = None,
+    period_start_date: date | None = None,
+    period_type: str = DEFAULT_CHART_PERIOD,
 ) -> dict[str, Any]:
     """从当前动态模型数据库生成PNG图表。"""
 
-    if days <= 0:
+    if days is not None and days <= 0:
         raise ValueError("图表天数必须大于0")
     if not 72 <= dpi <= 600:
         raise ValueError("图表DPI必须位于72到600之间")
@@ -111,7 +113,18 @@ def generate_chart(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.unlink(missing_ok=True)
-    frame = load_chart_data(database_path, days)
+    frame = load_chart_data(
+        database_path,
+        days=days,
+        start_date=period_start_date,
+        end_date=expected_trade_date,
+    )
+    coverage_start_date = pd.Timestamp(frame.iloc[0]["date"]).date()
+    if period_start_date and coverage_start_date > period_start_date:
+        raise ChartDataError(
+            f"数据库近1年历史覆盖不足，首条记录为 {coverage_start_date.isoformat()}，"
+            f"应从 {period_start_date.isoformat()} 开始；不会补齐或虚构数据"
+        )
     latest = frame.iloc[-1]
     latest_date = pd.Timestamp(latest["date"]).date()
     if expected_trade_date and latest_date < expected_trade_date:
@@ -134,6 +147,8 @@ def generate_chart(
             dpi,
             requested_date=requested_date,
             market_status=market_status,
+            period_type=period_type,
+            requested_days=days,
         )
         os.replace(temporary_path, output_path)
     finally:
@@ -144,7 +159,14 @@ def generate_chart(
         "format": "png",
         "layout_version": CHART_LAYOUT_VERSION,
         "rows": int(len(frame)),
-        "days": int(days),
+        "period": period_type,
+        "days": int(days) if days is not None else None,
+        "trading_days": int(len(frame)),
+        "period_start_date": (
+            period_start_date.isoformat() if period_start_date else None
+        ),
+        "coverage_start_date": coverage_start_date.isoformat(),
+        "coverage_end_date": latest_date.isoformat(),
         "requested_date": requested_date.isoformat() if requested_date else None,
         "expected_trade_date": (
             expected_trade_date.isoformat() if expected_trade_date else None
@@ -162,7 +184,12 @@ def generate_chart(
     }
 
 
-def load_chart_data(database_path: Path, days: int) -> pd.DataFrame:
+def load_chart_data(
+    database_path: Path,
+    days: int | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> pd.DataFrame:
     """只读加载V4动态模型派生结果。"""
 
     if not database_path.exists() or not database_path.is_file():
@@ -195,19 +222,40 @@ def load_chart_data(database_path: Path, days: int) -> pd.DataFrame:
                 "数据库仍是旧版结构，请先运行 daily 完成升级；缺少字段: "
                 + ", ".join(missing)
             )
-        frame = pd.read_sql_query(
+        columns_sql = """
+            date, panic_index, panic_percentile, emotion_level,
+            model_version, threshold_p05, threshold_p25,
+            threshold_p75, threshold_p95, quality_status
+        """
+        if days is not None:
+            query = f"""
+                SELECT * FROM (
+                    SELECT {columns_sql}
+                    FROM panic_index
+                    ORDER BY date DESC
+                    LIMIT ?
+                ) ORDER BY date
             """
-            SELECT * FROM (
-                SELECT date, panic_index, panic_percentile, emotion_level,
-                       model_version, threshold_p05, threshold_p25,
-                       threshold_p75, threshold_p95, quality_status
+            params = (days,)
+        elif start_date is not None and end_date is not None:
+            query = f"""
+                SELECT {columns_sql}
                 FROM panic_index
-                ORDER BY date DESC
-                LIMIT ?
-            ) ORDER BY date
-            """,
+                WHERE date >= ? AND date <= ?
+                ORDER BY date
+            """
+            params = (start_date.isoformat(), end_date.isoformat())
+        else:
+            query = f"""
+                SELECT {columns_sql}
+                FROM panic_index
+                ORDER BY date
+            """
+            params = ()
+        frame = pd.read_sql_query(
+            query,
             connection,
-            params=(days,),
+            params=params,
             parse_dates=["date"],
         )
     if frame.empty:
@@ -246,6 +294,8 @@ def render_chart(
     dpi: int,
     requested_date: date | None = None,
     market_status: str | None = None,
+    period_type: str = DEFAULT_CHART_PERIOD,
+    requested_days: int | None = None,
 ) -> None:
     """延迟导入Matplotlib，并按交易记录等距绘制横轴。"""
 
@@ -330,7 +380,14 @@ def render_chart(
     latest_date = dates.iloc[-1].date()
     figure.suptitle(text["title"], fontsize=16, fontweight="bold")
     score_axis.set_title(
-        build_date_note(latest_date, requested_date, market_status, use_chinese),
+        build_date_note(
+            latest_date,
+            requested_date,
+            market_status,
+            use_chinese,
+            period_type,
+            requested_days,
+        ),
         fontsize=10,
         color="#555555",
     )
@@ -377,28 +434,40 @@ def build_date_note(
     requested_date: date | None,
     market_status: str | None,
     use_chinese: bool,
+    period_type: str = DEFAULT_CHART_PERIOD,
+    requested_days: int | None = None,
 ) -> str:
+    if period_type == DEFAULT_CHART_PERIOD:
+        period_note = "近1年实际交易记录" if use_chinese else "Trailing 1-Year Records"
+    elif requested_days is not None:
+        period_note = (
+            f"最近 {requested_days} 个交易日"
+            if use_chinese
+            else f"Latest {requested_days} Trading Sessions"
+        )
+    else:
+        period_note = "实际交易记录" if use_chinese else "Available Trading Records"
     if use_chinese:
         if requested_date and market_status == "skipped_non_trading_day":
             return (
-                f"运行日 {requested_date.isoformat()} 为非交易日｜"
+                f"{period_note}｜运行日 {requested_date.isoformat()} 为非交易日｜"
                 f"数据截至最近交易日 {latest_date.isoformat()}"
             )
         if requested_date and market_status == "market_not_ready":
             return (
-                f"运行日 {requested_date.isoformat()} 盘后数据尚未就绪｜"
+                f"{period_note}｜运行日 {requested_date.isoformat()} 盘后数据尚未就绪｜"
                 f"数据截至 {latest_date.isoformat()}"
             )
-        return f"数据截至交易日 {latest_date.isoformat()}"
+        return f"{period_note}｜数据截至交易日 {latest_date.isoformat()}"
 
     if requested_date and market_status == "skipped_non_trading_day":
         return (
-            f"Run date {requested_date.isoformat()} is not a trading day | "
+            f"{period_note} | Run date {requested_date.isoformat()} is not a trading day | "
             f"Data through {latest_date.isoformat()}"
         )
     if requested_date and market_status == "market_not_ready":
         return (
-            f"Run date {requested_date.isoformat()} is not ready | "
+            f"{period_note} | Run date {requested_date.isoformat()} is not ready | "
             f"Data through {latest_date.isoformat()}"
         )
-    return f"Data through trading session {latest_date.isoformat()}"
+    return f"{period_note} | Data through trading session {latest_date.isoformat()}"

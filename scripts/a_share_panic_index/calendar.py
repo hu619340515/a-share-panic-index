@@ -30,6 +30,10 @@ class TradingCalendar:
             return self.calendar.previous_session(timestamp).date()
         return self.calendar.date_to_session(timestamp, direction="previous").date()
 
+    def sessions_in_range(self, start: date, end: date) -> list[date]:
+        sessions = self.calendar.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+        return [timestamp.date() for timestamp in sessions]
+
     def context(
         self,
         requested_date: date | None = None,
