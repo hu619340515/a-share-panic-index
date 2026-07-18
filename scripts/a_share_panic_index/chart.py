@@ -19,6 +19,7 @@ from .database import DB_SCHEMA_VERSION
 
 
 CHART_LAYOUT_VERSION = "2-panel-trading-sessions-v1"
+DEFAULT_CHART_DAYS = 120
 
 REQUIRED_COLUMNS = {
     "date",
@@ -93,7 +94,7 @@ class ChartStaleError(RuntimeError):
 def generate_chart(
     database_path: Path,
     output_path: Path,
-    days: int = 252,
+    days: int = DEFAULT_CHART_DAYS,
     dpi: int = 160,
     requested_date: date | None = None,
     expected_trade_date: date | None = None,

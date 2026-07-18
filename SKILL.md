@@ -43,7 +43,7 @@ python3 scripts/cli.py daily \
 python3 scripts/cli.py chart \
   --database /path/to/panic_index.db \
   --output reports/panic_index.png \
-  --days 252 \
+  --days 120 \
   --dpi 160
 ```
 
@@ -78,4 +78,6 @@ python3 scripts/cli.py chart \
 - 四项必需指标为波动率、涨跌停比、期货基差和南向资金，缺一项不生成当日指数。
 - 情绪等级使用 P05/P25/P75/P95 动态阈值，不使用固定 20/40/60/80 阈值，也不使用滞回机制。
 - 图表固定为两个面板，横轴按实际交易记录等距排列，不为周末和休市日预留空白日期。
+- 图表默认显示最近 120 个实际交易日；不要把 120 个交易日转换成 120 个自然日。
+- 动态模型中的 252/756 是阈值计算历史窗口，不是出图天数，不得据此把图表周期改成 252 日。
 - 日志写入 `logs/daily.log`，按天轮转并默认保留 30 天。

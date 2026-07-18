@@ -21,7 +21,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from a_share_panic_index import APP_VERSION
 from a_share_panic_index.calendar import TradingCalendar
-from a_share_panic_index.chart import ChartDataError, ChartStaleError, generate_chart
+from a_share_panic_index.chart import (
+    DEFAULT_CHART_DAYS,
+    ChartDataError,
+    ChartStaleError,
+    generate_chart,
+)
 from a_share_panic_index.config import Settings
 from a_share_panic_index.logging_utils import configure_logging
 from a_share_panic_index.runner import DailyRunner
@@ -65,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     chart_parser.add_argument("--config", help="配置文件路径")
     chart_parser.add_argument("--database", help="SQLite数据库路径")
     chart_parser.add_argument("--output", "-o", default="reports/panic_index.png")
-    chart_parser.add_argument("--days", "-d", type=int, default=252)
+    chart_parser.add_argument("--days", "-d", type=int, default=DEFAULT_CHART_DAYS)
     chart_parser.add_argument("--dpi", type=int, default=160)
     return parser
 

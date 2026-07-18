@@ -36,6 +36,8 @@ flowchart LR
 - 情绪等级固定为：极度平静、偏平静、中性、偏恐慌、极度恐慌。
 - 应用版本固定为 `2.0`，数据库结构版本 `4` 仅用于内部迁移，不是可选模型版本。
 
+这里的 252/756 是动态阈值模型使用的短期/长期历史窗口，不是图表展示周期。图表默认只展示最近 120 个真实交易日。
+
 ### 指标含义
 
 | 指标 | 默认权重 | 压力方向 |
@@ -130,13 +132,15 @@ python3 scripts/cli.py chart --output reports/panic_index.png
 --database PATH
 --config PATH
 --output PATH
---days 252
+--days 120
 --dpi 160
 ```
 
 图表直接读取新版 SQLite V4 的 `panic_index` 表，展示市场压力指数、P05/P25/P75/P95 每日动态阈值、历史分位、当前等级和 provisional 标记。命令返回单个 JSON 对象，图片路径位于 `chart.output`。
 
 新版图表固定为两个面板，横轴按实际交易记录等距排列，不会为周末和休市日留下空白位置。非交易日运行时会同时标注运行日和最近交易日，例如在 2026-07-18（周六）运行时，数据截至日期应为 2026-07-17，这是正常的新鲜快照。
+
+默认周期为最近 **120 个实际交易日**，不是 120 个自然日；SQL 直接读取数据库最后 120 条交易日记录。
 
 自动化程序发送图片前必须检查 `chart.layout_version=2-panel-trading-sessions-v1`、`chart.model_version=2.0` 和 `chart.is_fresh=true`。命令失败或数据过期时不会保留目标路径中的旧 PNG。
 

@@ -12,6 +12,12 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
+import pandas as pd
+
+from scripts.a_share_panic_index import APP_VERSION
+from scripts.a_share_panic_index.chart import DEFAULT_CHART_DAYS, load_chart_data
+from scripts.a_share_panic_index.database import DB_SCHEMA_VERSION
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "daily_2026_07_17.json"
@@ -105,7 +111,7 @@ market:
             "--output",
             str(output_path or self.temp_path / "市场压力指数.png"),
             "--days",
-            "252",
+            "120",
             "--dpi",
             "100",
         ]
@@ -203,6 +209,7 @@ market:
         self.assertEqual(payload["schema_version"], "2.0")
         self.assertEqual(payload["status"], "chart_success")
         self.assertEqual(payload["chart"]["model_version"], "2.0")
+        self.assertEqual(payload["chart"]["days"], 120)
         self.assertEqual(
             payload["chart"]["layout_version"],
             "2-panel-trading-sessions-v1",
@@ -287,6 +294,62 @@ market:
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stdout.strip(), "False")
+
+    def test_chart_default_period_is_120_trading_records(self):
+        database_path = self.temp_path / "period.db"
+        dates = pd.bdate_range("2026-01-01", periods=130)
+        with closing(sqlite3.connect(database_path)) as connection:
+            connection.execute(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT)"
+            )
+            connection.execute(
+                "INSERT INTO metadata(key, value) VALUES ('schema_version', ?)",
+                (DB_SCHEMA_VERSION,),
+            )
+            connection.execute(
+                """
+                CREATE TABLE panic_index(
+                    date TEXT PRIMARY KEY,
+                    panic_index REAL,
+                    panic_percentile REAL,
+                    emotion_level TEXT,
+                    model_version TEXT,
+                    threshold_p05 REAL,
+                    threshold_p25 REAL,
+                    threshold_p75 REAL,
+                    threshold_p95 REAL,
+                    quality_status TEXT
+                )
+                """
+            )
+            connection.executemany(
+                """
+                INSERT INTO panic_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        timestamp.date().isoformat(),
+                        float(position % 100),
+                        float(position % 100),
+                        "中性",
+                        APP_VERSION,
+                        5.0,
+                        25.0,
+                        75.0,
+                        95.0,
+                        "final",
+                    )
+                    for position, timestamp in enumerate(dates)
+                ],
+            )
+            connection.commit()
+
+        frame = load_chart_data(database_path, DEFAULT_CHART_DAYS)
+
+        self.assertEqual(DEFAULT_CHART_DAYS, 120)
+        self.assertEqual(len(frame), 120)
+        self.assertEqual(frame.iloc[0]["date"], dates[10])
+        self.assertTrue(all(timestamp.weekday() < 5 for timestamp in frame["date"]))
 
     def test_primary_history_reconciles_provisional_record(self):
         first = self.run_daily("2026-07-17")
