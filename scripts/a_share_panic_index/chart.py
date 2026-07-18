@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import sqlite3
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -13,6 +17,8 @@ import pandas as pd
 from . import APP_VERSION
 from .database import DB_SCHEMA_VERSION
 
+
+CHART_LAYOUT_VERSION = "2-panel-trading-sessions-v1"
 
 REQUIRED_COLUMNS = {
     "date",
@@ -27,9 +33,61 @@ REQUIRED_COLUMNS = {
     "quality_status",
 }
 
+CHINESE_FONTS = (
+    "Microsoft YaHei",
+    "Microsoft JhengHei",
+    "SimHei",
+    "PingFang SC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Source Han Sans CN",
+    "WenQuanYi Zen Hei",
+    "Arial Unicode MS",
+)
+
+TEXT_ZH = {
+    "title": f"A股市场压力指数（动态模型 {APP_VERSION}）",
+    "score": "市场压力指数",
+    "p05": "P05 极度平静",
+    "p25": "P25 偏平静",
+    "p75": "P75 偏恐慌",
+    "p95": "P95 极度恐慌",
+    "provisional": "临时数据",
+    "score_axis": "压力指数",
+    "percentile": "历史分位",
+    "percentile_axis": "历史分位（%）",
+    "date_axis": "交易日（仅显示实际交易记录）",
+}
+
+TEXT_EN = {
+    "title": f"A-Share Market Stress Index (Dynamic Model {APP_VERSION})",
+    "score": "Market Stress Index",
+    "p05": "P05 Extreme Calm",
+    "p25": "P25 Calm",
+    "p75": "P75 Stressed",
+    "p95": "P95 Extreme Stress",
+    "provisional": "Provisional Data",
+    "score_axis": "Stress Index",
+    "percentile": "Historical Percentile",
+    "percentile_axis": "Historical Percentile (%)",
+    "date_axis": "Trading Sessions Only",
+}
+
+EMOTION_LEVELS_EN = {
+    "极度平静": "Extreme Calm",
+    "偏平静": "Calm",
+    "中性": "Neutral",
+    "偏恐慌": "Stressed",
+    "极度恐慌": "Extreme Stress",
+}
+
 
 class ChartDataError(RuntimeError):
     """图表数据库不可用或不是当前模型。"""
+
+
+class ChartStaleError(RuntimeError):
+    """图表数据库没有更新到预期交易日。"""
 
 
 def generate_chart(
@@ -37,6 +95,9 @@ def generate_chart(
     output_path: Path,
     days: int = 252,
     dpi: int = 160,
+    requested_date: date | None = None,
+    expected_trade_date: date | None = None,
+    market_status: str | None = None,
 ) -> dict[str, Any]:
     """从当前动态模型数据库生成PNG图表。"""
 
@@ -46,22 +107,57 @@ def generate_chart(
         raise ValueError("图表DPI必须位于72到600之间")
     if output_path.suffix.lower() != ".png":
         raise ValueError("图表输出文件必须使用 .png 扩展名")
-    frame = load_chart_data(database_path, days)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    render_chart(frame, output_path, dpi)
+    output_path.unlink(missing_ok=True)
+    frame = load_chart_data(database_path, days)
     latest = frame.iloc[-1]
+    latest_date = pd.Timestamp(latest["date"]).date()
+    if expected_trade_date and latest_date < expected_trade_date:
+        raise ChartStaleError(
+            f"图表数据库最新交易日为 {latest_date.isoformat()}，"
+            f"预期交易日为 {expected_trade_date.isoformat()}，请先运行 daily"
+        )
+    if expected_trade_date and latest_date > expected_trade_date:
+        raise ChartDataError(
+            f"数据库包含晚于预期交易日的数据: {latest_date.isoformat()}"
+        )
+
+    temporary_path = output_path.with_name(
+        f".{output_path.stem}.{uuid4().hex}.tmp.png"
+    )
+    try:
+        render_chart(
+            frame,
+            temporary_path,
+            dpi,
+            requested_date=requested_date,
+            market_status=market_status,
+        )
+        os.replace(temporary_path, output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
     return {
         "output": str(output_path),
         "format": "png",
+        "layout_version": CHART_LAYOUT_VERSION,
         "rows": int(len(frame)),
         "days": int(days),
-        "as_of_date": pd.Timestamp(latest["date"]).date().isoformat(),
+        "requested_date": requested_date.isoformat() if requested_date else None,
+        "expected_trade_date": (
+            expected_trade_date.isoformat() if expected_trade_date else None
+        ),
+        "as_of_date": latest_date.isoformat(),
+        "market_status": market_status,
+        "is_fresh": expected_trade_date is None or latest_date == expected_trade_date,
         "model_version": str(latest["model_version"]),
         "panic_index": round(float(latest["panic_index"]), 4),
         "panic_percentile": round(float(latest["panic_percentile"]), 4),
         "emotion_level": str(latest["emotion_level"]),
         "quality_status": str(latest["quality_status"]),
         "file_size": output_path.stat().st_size,
+        "sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
     }
 
 
@@ -115,6 +211,10 @@ def load_chart_data(database_path: Path, days: int) -> pd.DataFrame:
         )
     if frame.empty:
         raise ChartDataError("数据库没有可用于画图的动态模型数据")
+    if frame["date"].isna().any():
+        raise ChartDataError("数据库图表日期包含空值或无效格式")
+    if frame["date"].duplicated().any():
+        raise ChartDataError("数据库图表数据包含重复交易日")
     numeric_columns = [
         "panic_index",
         "panic_percentile",
@@ -139,23 +239,33 @@ def load_chart_data(database_path: Path, days: int) -> pd.DataFrame:
     return frame
 
 
-def render_chart(frame: pd.DataFrame, output_path: Path, dpi: int) -> None:
-    """延迟导入Matplotlib，避免日报命令加载绘图库。"""
+def render_chart(
+    frame: pd.DataFrame,
+    output_path: Path,
+    dpi: int,
+    requested_date: date | None = None,
+    market_status: str | None = None,
+) -> None:
+    """延迟导入Matplotlib，并按交易记录等距绘制横轴。"""
 
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.dates as mdates
     import matplotlib.font_manager as font_manager
     import matplotlib.pyplot as plt
 
     available_fonts = {font.name for font in font_manager.fontManager.ttflist}
-    candidates = ["Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "DejaVu Sans"]
-    selected = next((font for font in candidates if font in available_fonts), "DejaVu Sans")
-    plt.rcParams["font.sans-serif"] = [selected]
+    selected_font = next(
+        (font for font in CHINESE_FONTS if font in available_fonts),
+        "DejaVu Sans",
+    )
+    use_chinese = selected_font != "DejaVu Sans"
+    text = TEXT_ZH if use_chinese else TEXT_EN
+    plt.rcParams["font.sans-serif"] = [selected_font]
     plt.rcParams["axes.unicode_minus"] = False
 
-    dates = frame["date"]
+    dates = pd.to_datetime(frame["date"]).reset_index(drop=True)
+    positions = np.arange(len(frame), dtype=float)
     figure, (score_axis, percentile_axis) = plt.subplots(
         2,
         1,
@@ -164,21 +274,21 @@ def render_chart(frame: pd.DataFrame, output_path: Path, dpi: int) -> None:
         gridspec_kw={"height_ratios": [2, 1]},
     )
     score_axis.plot(
-        dates,
+        positions,
         frame["panic_index"],
         color="#1f4e79",
         linewidth=2.0,
-        label="市场压力指数",
+        label=text["score"],
     )
     threshold_styles = (
-        ("threshold_p05", "P05 极度平静", "#2e8b57"),
-        ("threshold_p25", "P25 偏平静", "#7aaa45"),
-        ("threshold_p75", "P75 偏恐慌", "#e68a00"),
-        ("threshold_p95", "P95 极度恐慌", "#c62828"),
+        ("threshold_p05", text["p05"], "#2e8b57"),
+        ("threshold_p25", text["p25"], "#7aaa45"),
+        ("threshold_p75", text["p75"], "#e68a00"),
+        ("threshold_p95", text["p95"], "#c62828"),
     )
     for column, label, color in threshold_styles:
         score_axis.plot(
-            dates,
+            positions,
             frame[column],
             color=color,
             linewidth=1.0,
@@ -186,34 +296,44 @@ def render_chart(frame: pd.DataFrame, output_path: Path, dpi: int) -> None:
             alpha=0.85,
             label=label,
         )
-    provisional = frame["quality_status"].eq("provisional")
+    provisional = frame["quality_status"].eq("provisional").to_numpy()
     if provisional.any():
         score_axis.scatter(
-            dates[provisional],
+            positions[provisional],
             frame.loc[provisional, "panic_index"],
             color="#7b1fa2",
             marker="x",
             s=35,
-            label="临时数据",
+            label=text["provisional"],
             zorder=5,
         )
     latest = frame.iloc[-1]
+    latest_position = positions[-1]
+    latest_level = str(latest["emotion_level"])
+    if not use_chinese:
+        latest_level = EMOTION_LEVELS_EN.get(latest_level, "Unknown")
     score_axis.scatter(
-        [latest["date"]],
+        [latest_position],
         [latest["panic_index"]],
         color="#111111",
         s=40,
         zorder=6,
     )
     score_axis.annotate(
-        f"{latest['panic_index']:.2f}  {latest['emotion_level']}",
-        xy=(latest["date"], latest["panic_index"]),
+        f"{latest['panic_index']:.2f}  {latest_level}",
+        xy=(latest_position, latest["panic_index"]),
         xytext=(8, 10),
         textcoords="offset points",
         fontsize=10,
     )
-    score_axis.set_title(f"A股市场压力指数（动态模型 {APP_VERSION}）", fontsize=16)
-    score_axis.set_ylabel("压力指数")
+    latest_date = dates.iloc[-1].date()
+    figure.suptitle(text["title"], fontsize=16, fontweight="bold")
+    score_axis.set_title(
+        build_date_note(latest_date, requested_date, market_status, use_chinese),
+        fontsize=10,
+        color="#555555",
+    )
+    score_axis.set_ylabel(text["score_axis"])
     score_axis.grid(alpha=0.2)
     score_axis.legend(loc="upper left", ncol=3, fontsize=9)
 
@@ -223,23 +343,61 @@ def render_chart(frame: pd.DataFrame, output_path: Path, dpi: int) -> None:
     percentile_axis.axhspan(75, 95, color="#ff9800", alpha=0.12)
     percentile_axis.axhspan(95, 100, color="#c62828", alpha=0.16)
     percentile_axis.plot(
-        dates,
+        positions,
         frame["panic_percentile"],
         color="#512da8",
         linewidth=1.8,
-        label="历史分位",
+        label=text["percentile"],
     )
     for level in (5, 25, 75, 95):
         percentile_axis.axhline(level, color="#666666", linewidth=0.6, alpha=0.45)
     percentile_axis.set_ylim(0, 100)
-    percentile_axis.set_ylabel("历史分位（%）")
-    percentile_axis.set_xlabel("交易日")
+    percentile_axis.set_ylabel(text["percentile_axis"])
+    percentile_axis.set_xlabel(text["date_axis"])
     percentile_axis.grid(axis="x", alpha=0.15)
     percentile_axis.legend(loc="upper left")
 
-    locator = mdates.AutoDateLocator(minticks=5, maxticks=10)
-    percentile_axis.xaxis.set_major_locator(locator)
-    percentile_axis.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    figure.tight_layout()
+    tick_count = min(8, len(frame))
+    tick_positions = np.unique(
+        np.linspace(0, len(frame) - 1, num=tick_count).round().astype(int)
+    )
+    percentile_axis.set_xticks(tick_positions)
+    percentile_axis.set_xticklabels(
+        [dates.iloc[position].strftime("%Y-%m-%d") for position in tick_positions]
+    )
+    percentile_axis.set_xlim(-0.5, len(frame) - 0.5)
+    figure.tight_layout(rect=(0, 0, 1, 0.96))
     figure.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
+
+
+def build_date_note(
+    latest_date: date,
+    requested_date: date | None,
+    market_status: str | None,
+    use_chinese: bool,
+) -> str:
+    if use_chinese:
+        if requested_date and market_status == "skipped_non_trading_day":
+            return (
+                f"运行日 {requested_date.isoformat()} 为非交易日｜"
+                f"数据截至最近交易日 {latest_date.isoformat()}"
+            )
+        if requested_date and market_status == "market_not_ready":
+            return (
+                f"运行日 {requested_date.isoformat()} 盘后数据尚未就绪｜"
+                f"数据截至 {latest_date.isoformat()}"
+            )
+        return f"数据截至交易日 {latest_date.isoformat()}"
+
+    if requested_date and market_status == "skipped_non_trading_day":
+        return (
+            f"Run date {requested_date.isoformat()} is not a trading day | "
+            f"Data through {latest_date.isoformat()}"
+        )
+    if requested_date and market_status == "market_not_ready":
+        return (
+            f"Run date {requested_date.isoformat()} is not ready | "
+            f"Data through {latest_date.isoformat()}"
+        )
+    return f"Data through trading session {latest_date.isoformat()}"

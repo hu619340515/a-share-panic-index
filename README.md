@@ -136,6 +136,10 @@ python3 scripts/cli.py chart --output reports/panic_index.png
 
 图表直接读取新版 SQLite V4 的 `panic_index` 表，展示市场压力指数、P05/P25/P75/P95 每日动态阈值、历史分位、当前等级和 provisional 标记。命令返回单个 JSON 对象，图片路径位于 `chart.output`。
 
+新版图表固定为两个面板，横轴按实际交易记录等距排列，不会为周末和休市日留下空白位置。非交易日运行时会同时标注运行日和最近交易日，例如在 2026-07-18（周六）运行时，数据截至日期应为 2026-07-17，这是正常的新鲜快照。
+
+自动化程序发送图片前必须检查 `chart.layout_version=2-panel-trading-sessions-v1`、`chart.model_version=2.0` 和 `chart.is_fresh=true`。命令失败或数据过期时不会保留目标路径中的旧 PNG。
+
 不存在 `--type`、`simple`、`comprehensive` 或 `comparison` 等旧版选择；传入旧参数会返回退出码 `2`。
 
 ### 3. 人工查看当前值

@@ -110,9 +110,12 @@ market:
             "100",
         ]
         command.extend(extra_arguments or [])
+        environment = os.environ.copy()
+        environment["PANIC_INDEX_NOW"] = "2026-07-18T10:00:00+08:00"
         return subprocess.run(
             command,
             cwd=PROJECT_ROOT,
+            env=environment,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -200,14 +203,33 @@ market:
         self.assertEqual(payload["schema_version"], "2.0")
         self.assertEqual(payload["status"], "chart_success")
         self.assertEqual(payload["chart"]["model_version"], "2.0")
+        self.assertEqual(
+            payload["chart"]["layout_version"],
+            "2-panel-trading-sessions-v1",
+        )
+        self.assertEqual(payload["chart"]["requested_date"], "2026-07-18")
+        self.assertEqual(payload["chart"]["expected_trade_date"], "2026-07-17")
+        self.assertEqual(payload["chart"]["as_of_date"], "2026-07-17")
+        self.assertEqual(
+            payload["chart"]["market_status"],
+            "skipped_non_trading_day",
+        )
+        self.assertTrue(payload["chart"]["is_fresh"])
+        self.assertEqual(len(payload["chart"]["sha256"]), 64)
         self.assertEqual(payload["chart"]["output"], str(output_path.resolve()))
         self.assertEqual(output_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
         self.assertIn("chart开始", completed.stderr)
 
     def test_chart_rejects_missing_or_legacy_database(self):
-        missing = self.run_chart(database_path=self.temp_path / "missing.db")
+        stale_output = self.temp_path / "旧版缓存.png"
+        stale_output.write_bytes(b"old chart")
+        missing = self.run_chart(
+            database_path=self.temp_path / "missing.db",
+            output_path=stale_output,
+        )
         self.assertEqual(missing.returncode, 4)
         self.assertEqual(json.loads(missing.stdout)["status"], "chart_data_invalid")
+        self.assertFalse(stale_output.exists())
 
         legacy_database = self.temp_path / "legacy.db"
         with closing(sqlite3.connect(legacy_database)) as connection:
@@ -228,6 +250,21 @@ market:
             "非当前模型版本",
             json.loads(old_model.stdout)["errors"][0]["message"],
         )
+
+    def test_chart_rejects_stale_snapshot_and_removes_old_output(self):
+        daily = self.run_daily("2026-07-16")
+        self.assertEqual(daily.returncode, 0, daily.stderr)
+        output_path = self.temp_path / "stale.png"
+        output_path.write_bytes(b"old chart")
+
+        completed = self.run_chart(output_path=output_path)
+
+        self.assertEqual(completed.returncode, 3)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["status"], "chart_stale")
+        self.assertTrue(payload["retry"]["recommended"])
+        self.assertEqual(payload["retry"]["after_seconds"], 900)
+        self.assertFalse(output_path.exists())
 
     def test_chart_rejects_removed_legacy_type_option(self):
         completed = self.run_chart(extra_arguments=["--type", "comprehensive"])

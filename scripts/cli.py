@@ -20,7 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from a_share_panic_index import APP_VERSION
-from a_share_panic_index.chart import ChartDataError, generate_chart
+from a_share_panic_index.calendar import TradingCalendar
+from a_share_panic_index.chart import ChartDataError, ChartStaleError, generate_chart
 from a_share_panic_index.config import Settings
 from a_share_panic_index.logging_utils import configure_logging
 from a_share_panic_index.runner import DailyRunner
@@ -128,21 +129,39 @@ def run_daily(args, human: bool = False) -> int:
 
 def run_chart(args) -> int:
     run_id = str(uuid4())
-    generated_at = (parse_now() or datetime.now().astimezone()).isoformat()
+    now = parse_now() or datetime.now().astimezone()
+    generated_at = now.isoformat()
     logger = None
     try:
         settings = Settings(args.config)
         database_path = resolve_database_path(settings, args.database)
         logger = build_logger(settings, run_id)
         output_path = Path(args.output).expanduser().resolve()
+        market = settings.section("market")
+        calendar = TradingCalendar(
+            market.get("calendar", "XSHG"),
+            market.get("timezone", "Asia/Shanghai"),
+            market.get("data_ready_time", "15:30"),
+        )
+        context = calendar.context(now=now)
         logger.info(
-            "chart开始 database=%s output=%s days=%s dpi=%s",
+            "chart开始 database=%s output=%s days=%s dpi=%s requested=%s expected=%s",
             database_path,
             output_path,
             args.days,
             args.dpi,
+            context.requested_date,
+            context.expected_trade_date,
         )
-        chart = generate_chart(database_path, output_path, args.days, args.dpi)
+        chart = generate_chart(
+            database_path,
+            output_path,
+            args.days,
+            args.dpi,
+            requested_date=context.requested_date,
+            expected_trade_date=context.expected_trade_date,
+            market_status=context.status,
+        )
         logger.info(
             "chart完成 as_of_date=%s output=%s",
             chart["as_of_date"],
@@ -151,6 +170,8 @@ def run_chart(args) -> int:
         payload = chart_payload(run_id, generated_at, True, "chart_success", 0, chart)
     except (FileNotFoundError, ValueError) as error:
         payload = chart_error_payload(run_id, generated_at, 2, "configuration_error", error)
+    except ChartStaleError as error:
+        payload = chart_error_payload(run_id, generated_at, 3, "chart_stale", error)
     except ChartDataError as error:
         payload = chart_error_payload(run_id, generated_at, 4, "chart_data_invalid", error)
     except sqlite3.Error as error:
@@ -186,6 +207,10 @@ def chart_payload(
         "run_id": run_id,
         "generated_at": generated_at,
         "chart": chart,
+        "retry": {
+            "recommended": exit_code == 3,
+            "after_seconds": 900 if exit_code == 3 else None,
+        },
         "errors": errors or [],
     }
 

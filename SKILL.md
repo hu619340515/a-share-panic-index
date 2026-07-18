@@ -47,7 +47,17 @@ python3 scripts/cli.py chart \
   --dpi 160
 ```
 
-标准输出仍是单个 JSON 对象。成功时读取 `chart.output` 作为要发送的 PNG；`chart.model_version` 必须为 `2.0`。图表直接读取当前 V4 数据库，不会重新运行旧计算器。
+标准输出仍是单个 JSON 对象。只有同时满足以下条件时才发送 `chart.output` 指向的 PNG：
+
+- `status=chart_success`
+- `chart.model_version=2.0`
+- `chart.layout_version=2-panel-trading-sessions-v1`
+- `chart.is_fresh=true`
+- 本次命令退出码为 `0`
+
+任一条件不满足时都不要发送目录中已有的旧图片。新版命令会在失败或数据过期时主动删除目标 PNG，避免缓存图被误发。图表直接读取当前 V4 数据库，不会重新运行旧计算器。
+
+非交易日的 `requested_date` 可以晚于 `as_of_date`：例如 2026-07-18 是周六，正确结果应显示运行日为 2026-07-18、数据截至最近交易日 2026-07-17，同时 `chart.is_fresh=true`。这不是数据过期。
 
 禁止调用已删除的 `cli.commands.chart`、`viz.charts`、`core.calculator`、`history`、`backtest`、`alert` 或 `monitor`。
 
@@ -67,4 +77,5 @@ python3 scripts/cli.py chart \
 - 波动率内部单位为年化小数；展示使用 `result.components.volatility_percent`。
 - 四项必需指标为波动率、涨跌停比、期货基差和南向资金，缺一项不生成当日指数。
 - 情绪等级使用 P05/P25/P75/P95 动态阈值，不使用固定 20/40/60/80 阈值，也不使用滞回机制。
+- 图表固定为两个面板，横轴按实际交易记录等距排列，不为周末和休市日预留空白日期。
 - 日志写入 `logs/daily.log`，按天轮转并默认保留 30 天。
