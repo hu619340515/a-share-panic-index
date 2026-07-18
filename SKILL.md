@@ -71,26 +71,6 @@ python3 scripts/cli.py chart \
 
 `quality_status=provisional` 表示使用当日备选数据源，可以展示，但要提示后续会自动复核。`result.signal` 只提供风险观察提示，不是买卖建议。
 
-## 生成综合图表
-
-日报生成后，可使用内置可视化模块生成120天综合趋势图（恐慌指数走势、分项指标、动态情绪阈值）：
-
-```bash
-python3 -c "
-import sys; sys.path.insert(0, '.')
-import os; os.environ['MPLBACKEND'] = 'Agg'
-from data.database import Database
-from viz.charts import Visualizer
-
-db = Database('data_cache/panic_index.db')
-df = db.get_latest(120)
-viz = Visualizer()
-viz.plot_comprehensive(df, None, 'panic_index_chart.png')
-"
-```
-
-图表保存为 PNG，可用 `MEDIA:/path/to/panic_index_chart.png` 格式发送给用户。
-
 ## 数据约定
 
 - 波动率内部单位为年化小数；展示使用 `result.components.volatility_percent`。
