@@ -1,126 +1,49 @@
-"""daily CLI 离线端到端测试。"""
-
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import closing
-from datetime import date
 from pathlib import Path
 
-import pandas as pd
-
-from scripts.a_share_panic_index import APP_VERSION
-from scripts.a_share_panic_index.calendar import TradingCalendar
-from scripts.a_share_panic_index.chart import DEFAULT_CHART_PERIOD
-from scripts.a_share_panic_index.database import DB_SCHEMA_VERSION
+from tests.helpers import PROJECT_ROOT, PROBE_FIXTURE, REALTIME_FIXTURE
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "daily_2026_07_17.json"
-
-
-class TestDailyCLI(unittest.TestCase):
+class TestCLI(unittest.TestCase):
     def setUp(self):
-        self.temp_directory = tempfile.TemporaryDirectory()
-        self.temp_path = Path(self.temp_directory.name)
-        self.database_path = self.temp_path / "panic_index.db"
-        self.config_path = self.temp_path / "settings.yaml"
-        self.config_path.write_text(
+        self.temp = tempfile.TemporaryDirectory(prefix="CLI中文路径-")
+        self.root = Path(self.temp.name)
+        self.config = self.root / "配置.yaml"
+        self.config.write_text(
             """
 database:
-  rebuild_days: 1100
-  overlap_days: 40
+  path: ./数据/指数.db
+  backup_directory: ./数据/备份
 logging:
-  directory: ./logs
+  directory: ./日志
   retention_days: 3
   level: INFO
-network:
-  max_retries: 1
-  retry_delay: 0
-  provider_timeout: 1
-  total_timeout: 20
-market:
-  calendar: XSHG
-  timezone: Asia/Shanghai
-  data_ready_time: '15:30'
 """.strip()
             + "\n",
             encoding="utf-8",
         )
 
     def tearDown(self):
-        self.temp_directory.cleanup()
+        self.temp.cleanup()
 
-    def run_daily(
+    def run_cli(
         self,
-        target_date: str,
+        arguments: list[str],
+        now: str = "2026-07-24T10:00:00+08:00",
         root_entry: bool = False,
-        fixture_path: Path = FIXTURE,
-        database_path: Path | None = None,
-    ):
-        environment = os.environ.copy()
-        environment.update(
-            {
-                "PANIC_INDEX_FIXTURE_FILE": str(fixture_path),
-                "PANIC_INDEX_DISABLE_SUBPROCESS": "1",
-                "PANIC_INDEX_NOW": f"{target_date}T16:00:00+08:00",
-            }
-        )
+    ) -> subprocess.CompletedProcess[str]:
         entry = PROJECT_ROOT / ("cli.py" if root_entry else "scripts/cli.py")
-        return subprocess.run(
-            [
-                sys.executable,
-                str(entry),
-                "daily",
-                "--date",
-                target_date,
-                "--config",
-                str(self.config_path),
-                "--database",
-                str(database_path or self.database_path),
-            ],
-            cwd=PROJECT_ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=30,
-            check=False,
-        )
-
-    def run_chart(
-        self,
-        root_entry: bool = False,
-        database_path: Path | None = None,
-        output_path: Path | None = None,
-        extra_arguments: list[str] | None = None,
-        days: int | None = 120,
-    ):
-        entry = PROJECT_ROOT / ("cli.py" if root_entry else "scripts/cli.py")
-        command = [
-            sys.executable,
-            str(entry),
-            "chart",
-            "--config",
-            str(self.config_path),
-            "--database",
-            str(database_path or self.database_path),
-            "--output",
-            str(output_path or self.temp_path / "市场压力指数.png"),
-            "--dpi",
-            "100",
-        ]
-        if days is not None:
-            command.extend(["--days", str(days)])
-        command.extend(extra_arguments or [])
+        command = [sys.executable, str(entry), *arguments]
         environment = os.environ.copy()
-        environment["PANIC_INDEX_NOW"] = "2026-07-18T10:00:00+08:00"
+        environment["PANIC_INDEX_NOW"] = now
+        environment["PYTHONUTF8"] = "1"
         return subprocess.run(
             command,
             cwd=PROJECT_ROOT,
@@ -128,180 +51,155 @@ market:
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=30,
+            timeout=60,
             check=False,
         )
 
-    def test_daily_outputs_single_json_and_persists_provisional_result(self):
-        completed = self.run_daily("2026-07-17")
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
+    def common(self) -> list[str]:
+        return ["--config", str(self.config)]
 
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["schema_version"], "2.0")
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["status"], "success_provisional")
-        self.assertEqual(payload["as_of_date"], "2026-07-17")
-        self.assertEqual(payload["quality_status"], "provisional")
-        self.assertEqual(payload["storage"]["incremental_start"], "2023-07-13")
-        self.assertLess(payload["result"]["components"]["volatility"], 1)
-        self.assertAlmostEqual(
-            payload["result"]["components"]["volatility_percent"], 35.0
+    def test_realtime_stdout_is_single_json_and_logs_go_to_stderr(self):
+        completed = self.run_cli(
+            ["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)]
         )
-        self.assertEqual(payload["result"]["status"], "极度恐慌")
-        self.assertEqual(payload["result"]["emotion"]["model_version"], "2.0")
-        self.assertEqual(
-            payload["result"]["emotion"]["classification_quality"],
-            "warming_up",
-        )
-        self.assertGreaterEqual(payload["result"]["emotion"]["percentile"], 90)
-        self.assertEqual(payload["result"]["signal"]["signal"], "contrarian_watch")
-        self.assertNotIn(payload["result"]["signal"]["signal"], {"buy", "sell"})
-        self.assertIn("daily开始", completed.stderr)
-
-        with closing(sqlite3.connect(self.database_path)) as connection:
-            row = connection.execute(
-                "SELECT panic_index, quality_status FROM panic_index WHERE date='2026-07-17'"
-            ).fetchone()
-        self.assertIsNotNone(row)
-        self.assertIsNotNone(row[0])
-        self.assertEqual(row[1], "provisional")
-
-    def test_incremental_and_full_rebuild_produce_same_target_result(self):
-        incremental_database = self.temp_path / "incremental.db"
-        full_database = self.temp_path / "full.db"
-
-        first = self.run_daily("2026-07-16", database_path=incremental_database)
-        self.assertEqual(first.returncode, 0, first.stderr)
-        incremental = self.run_daily(
-            "2026-07-17",
-            database_path=incremental_database,
-        )
-        full = self.run_daily("2026-07-17", database_path=full_database)
-        self.assertEqual(incremental.returncode, 0, incremental.stderr)
-        self.assertEqual(full.returncode, 0, full.stderr)
-
-        incremental_result = json.loads(incremental.stdout)["result"]
-        full_result = json.loads(full.stdout)["result"]
-        self.assertEqual(incremental_result["panic_index"], full_result["panic_index"])
-        self.assertEqual(incremental_result["status"], full_result["status"])
-        self.assertEqual(
-            incremental_result["emotion"]["thresholds"],
-            full_result["emotion"]["thresholds"],
-        )
-        self.assertEqual(
-            incremental_result["emotion"]["percentile"],
-            full_result["emotion"]["percentile"],
-        )
-
-    def test_root_cli_is_compatible(self):
-        completed = self.run_daily("2026-07-17", root_entry=True)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(json.loads(completed.stdout)["exit_code"], 0)
-
-    def test_chart_uses_only_current_dynamic_model(self):
-        daily = self.run_daily("2026-07-17")
-        self.assertEqual(daily.returncode, 0, daily.stderr)
-        output_path = self.temp_path / "中文路径" / "市场压力指数.png"
-
-        completed = self.run_chart(root_entry=True, output_path=output_path)
-
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(len(completed.stdout.strip().splitlines()), 1)
         payload = json.loads(completed.stdout)
-        self.assertEqual(payload["schema_version"], "2.0")
-        self.assertEqual(payload["status"], "chart_success")
-        self.assertEqual(payload["chart"]["model_version"], "2.0")
-        self.assertEqual(payload["chart"]["days"], 120)
-        self.assertEqual(
-            payload["chart"]["layout_version"],
-            "2-panel-trading-sessions-v1",
+        self.assertEqual(payload["schema_version"], "3.0")
+        self.assertEqual(payload["result"]["snapshot_type"], "realtime")
+        self.assertIn("realtime开始", completed.stderr)
+
+    def test_watch_outputs_one_json_per_iteration(self):
+        completed = self.run_cli(
+            [
+                "realtime",
+                *self.common(),
+                "--fixture",
+                str(REALTIME_FIXTURE),
+                "--watch",
+                "--interval",
+                "30",
+                "--iterations",
+                "2",
+            ]
         )
-        self.assertEqual(payload["chart"]["requested_date"], "2026-07-18")
-        self.assertEqual(payload["chart"]["expected_trade_date"], "2026-07-17")
-        self.assertEqual(payload["chart"]["as_of_date"], "2026-07-17")
-        self.assertEqual(
-            payload["chart"]["market_status"],
-            "skipped_non_trading_day",
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        lines = completed.stdout.strip().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(json.loads(line)["ok"] for line in lines))
+
+    def test_non_trading_day_returns_latest_without_new_date(self):
+        self.run_cli(["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)])
+        completed = self.run_cli(
+            ["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)],
+            now="2026-07-25T10:00:00+08:00",
         )
-        self.assertTrue(payload["chart"]["is_fresh"])
-        self.assertEqual(len(payload["chart"]["sha256"]), 64)
-        self.assertEqual(payload["chart"]["output"], str(output_path.resolve()))
-        self.assertEqual(output_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertIn("chart开始", completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(payload["status"], "skipped_non_trading_day")
+        self.assertEqual(payload["as_of_date"], "2026-07-24")
 
-    def test_chart_rejects_missing_or_legacy_database(self):
-        stale_output = self.temp_path / "旧版缓存.png"
-        stale_output.write_bytes(b"old chart")
-        missing = self.run_chart(
-            database_path=self.temp_path / "missing.db",
-            output_path=stale_output,
-        )
-        self.assertEqual(missing.returncode, 4)
-        self.assertEqual(json.loads(missing.stdout)["status"], "chart_data_invalid")
-        self.assertFalse(stale_output.exists())
-
-        legacy_database = self.temp_path / "legacy.db"
-        with closing(sqlite3.connect(legacy_database)) as connection:
-            connection.execute("CREATE TABLE panic_index(date TEXT PRIMARY KEY)")
-            connection.commit()
-        legacy = self.run_chart(database_path=legacy_database)
-        self.assertEqual(legacy.returncode, 4)
-        self.assertIn("V4", json.loads(legacy.stdout)["errors"][0]["message"])
-
-        daily = self.run_daily("2026-07-17")
-        self.assertEqual(daily.returncode, 0, daily.stderr)
-        with closing(sqlite3.connect(self.database_path)) as connection:
-            connection.execute("UPDATE panic_index SET model_version='1.0'")
-            connection.commit()
-        old_model = self.run_chart()
-        self.assertEqual(old_model.returncode, 4)
-        self.assertIn(
-            "非当前模型版本",
-            json.loads(old_model.stdout)["errors"][0]["message"],
-        )
-
-    def test_chart_rejects_stale_snapshot_and_removes_old_output(self):
-        daily = self.run_daily("2026-07-16")
-        self.assertEqual(daily.returncode, 0, daily.stderr)
-        output_path = self.temp_path / "stale.png"
-        output_path.write_bytes(b"old chart")
-
-        completed = self.run_chart(output_path=output_path)
-
+    def test_stale_and_incomplete_have_fixed_exit_codes(self):
+        payload = json.loads((REALTIME_FIXTURE / "snapshot.json").read_text(encoding="utf-8"))
+        payload["providers"]["index"]["source_timestamp"] = "2026-07-24T09:50:00+08:00"
+        stale = self.root / "stale.json"
+        stale.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        completed = self.run_cli(["realtime", *self.common(), "--fixture", str(stale)])
         self.assertEqual(completed.returncode, 3)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["status"], "chart_stale")
-        self.assertTrue(payload["retry"]["recommended"])
-        self.assertEqual(payload["retry"]["after_seconds"], 900)
-        self.assertFalse(output_path.exists())
-
-    def test_chart_default_period_rejects_incomplete_year_history(self):
-        daily = self.run_daily("2026-07-17")
-        self.assertEqual(daily.returncode, 0, daily.stderr)
-        output_path = self.temp_path / "incomplete-year.png"
-        output_path.write_bytes(b"old chart")
-
-        completed = self.run_chart(output_path=output_path, days=None)
-
+        self.assertEqual(json.loads(completed.stdout)["status"], "stale")
+        payload = json.loads((REALTIME_FIXTURE / "snapshot.json").read_text(encoding="utf-8"))
+        payload["providers"]["futures"]["data"]["contracts"] = []
+        incomplete = self.root / "incomplete.json"
+        incomplete.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        completed = self.run_cli(
+            ["realtime", *self.common(), "--fixture", str(incomplete)]
+        )
         self.assertEqual(completed.returncode, 4)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["status"], "chart_data_invalid")
-        self.assertIn("近1年历史覆盖不足", payload["errors"][0]["message"])
-        self.assertFalse(output_path.exists())
+        self.assertEqual(json.loads(completed.stdout)["status"], "incomplete")
 
-    def test_chart_rejects_removed_legacy_type_option(self):
-        completed = self.run_chart(extra_arguments=["--type", "comprehensive"])
-        self.assertEqual(completed.returncode, 2)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["status"], "argument_error")
+    def test_daily_current_chart_replay_and_validation(self):
+        self.run_cli(["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)])
+        second = self.run_cli(
+            ["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)],
+            now="2026-07-24T10:05:00+08:00",
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        closing = self.run_cli(
+            ["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)],
+            now="2026-07-24T15:10:00+08:00",
+        )
+        self.assertEqual(closing.returncode, 0, closing.stderr)
+        daily = self.run_cli(
+            ["daily", *self.common(), "--date", "2026-07-24"],
+            now="2026-07-24T16:00:00+08:00",
+        )
+        self.assertEqual(daily.returncode, 0, daily.stderr)
+        daily_payload = json.loads(daily.stdout)
+        self.assertEqual(daily_payload["result"]["finality"], "final")
 
-    def test_importing_cli_does_not_import_matplotlib(self):
+    def test_daily_rejects_morning_snapshot_as_final(self):
+        self.run_cli(["realtime", *self.common(), "--fixture", str(REALTIME_FIXTURE)])
+        daily = self.run_cli(
+            [
+                "daily",
+                *self.common(),
+                "--date",
+                "2026-07-24",
+                "--fixture",
+                str(REALTIME_FIXTURE / "snapshot.json"),
+            ],
+            now="2026-07-24T16:00:00+08:00",
+        )
+        self.assertEqual(daily.returncode, 3)
+        self.assertIsNone(json.loads(daily.stdout)["result"])
+        current = self.run_cli(["current", *self.common()])
+        self.assertEqual(current.returncode, 0, current.stderr)
+        image = self.root / "报告" / "盘中.png"
+        chart = self.run_cli(
+            ["chart", *self.common(), "--type", "intraday", "--output", str(image)]
+        )
+        self.assertEqual(chart.returncode, 0, chart.stderr)
+        self.assertTrue(image.exists())
+        replay = self.run_cli(
+            ["replay", *self.common(), "--date", "2026-07-24", "--speed", "20"]
+        )
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        replay_payload = json.loads(replay.stdout)
+        self.assertFalse(replay_payload["result"]["network_access"])
+        validation = self.run_cli(
+            ["validate", *self.common(), "--mode", "realtime", "--output", str(self.root / "验证")]
+        )
+        self.assertEqual(validation.returncode, 0, validation.stderr)
+        self.assertEqual(
+            json.loads(validation.stdout)["result"]["validation_status"],
+            "insufficient_intraday_history",
+        )
+
+    def test_source_probe_fixture_and_root_entry(self):
+        output = self.root / "探测" / "source_probe.json"
+        completed = self.run_cli(
+            [
+                "sources",
+                "probe",
+                *self.common(),
+                "--fixture",
+                str(PROBE_FIXTURE),
+                "--output",
+                str(output),
+            ],
+            root_entry=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(output.exists())
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["result"]["probe_mode"], "fixture")
+
+    def test_importing_cli_is_lazy(self):
         completed = subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "import sys; import scripts.cli; print('matplotlib' in sys.modules)",
+                "import sys; import scripts.cli; print('matplotlib' in sys.modules, 'fastapi' in sys.modules)",
             ],
             cwd=PROJECT_ROOT,
             capture_output=True,
@@ -309,228 +207,7 @@ market:
             encoding="utf-8",
             check=False,
         )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout.strip(), "False")
-
-    def test_chart_default_period_uses_actual_one_year_sessions(self):
-        database_path = self.temp_path / "period.db"
-        calendar = TradingCalendar("XSHG", "Asia/Shanghai", "15:30")
-        sessions = calendar.sessions_in_range(
-            date(2025, 7, 17),
-            date(2026, 7, 17),
-        )
-        with closing(sqlite3.connect(database_path)) as connection:
-            connection.execute(
-                "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT)"
-            )
-            connection.execute(
-                "INSERT INTO metadata(key, value) VALUES ('schema_version', ?)",
-                (DB_SCHEMA_VERSION,),
-            )
-            connection.execute(
-                """
-                CREATE TABLE panic_index(
-                    date TEXT PRIMARY KEY,
-                    panic_index REAL,
-                    panic_percentile REAL,
-                    emotion_level TEXT,
-                    model_version TEXT,
-                    threshold_p05 REAL,
-                    threshold_p25 REAL,
-                    threshold_p75 REAL,
-                    threshold_p95 REAL,
-                    quality_status TEXT
-                )
-                """
-            )
-            connection.executemany(
-                """
-                INSERT INTO panic_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        timestamp.date().isoformat(),
-                        float(position % 100),
-                        float(position % 100),
-                        "中性",
-                        APP_VERSION,
-                        5.0,
-                        25.0,
-                        75.0,
-                        95.0,
-                        "final",
-                    )
-                    for position, session in enumerate(sessions)
-                    for timestamp in [pd.Timestamp(session)]
-                ],
-            )
-            connection.commit()
-
-        completed = self.run_chart(database_path=database_path, days=None)
-
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["chart"]["period"], DEFAULT_CHART_PERIOD)
-        self.assertIsNone(payload["chart"]["days"])
-        self.assertEqual(payload["chart"]["trading_days"], len(sessions))
-        self.assertEqual(payload["chart"]["period_start_date"], "2025-07-17")
-        self.assertEqual(payload["chart"]["coverage_start_date"], "2025-07-17")
-
-    def test_primary_history_reconciles_provisional_record(self):
-        first = self.run_daily("2026-07-17")
-        self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertEqual(json.loads(first.stdout)["quality_status"], "provisional")
-
-        payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
-        providers = payload["providers"]
-        providers["baostock_volatility"]["records"].append(
-            {"date": "2026-07-17", "volatility": 0.34, "hs300_close": 4529.1}
-        )
-        providers["jrj_limit_ratio"]["records"].append(
-            {"date": "2026-07-17", "limit_ratio": 0.58, "limit_up": 42, "limit_down": 58}
-        )
-        providers["sina_futures_basis"]["records"].append(
-            {"date": "2026-07-17", "futures_basis": 0.055}
-        )
-        providers["eastmoney_southbound_history"]["records"].append(
-            {"date": "2026-07-17", "southbound_flow": -18.0}
-        )
-        final_fixture = self.temp_path / "final.json"
-        final_fixture.write_text(
-            json.dumps(payload, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        second = self.run_daily("2026-07-17", fixture_path=final_fixture)
-        self.assertEqual(second.returncode, 0, second.stderr)
-        second_payload = json.loads(second.stdout)
-        self.assertEqual(second_payload["status"], "success")
-        self.assertEqual(second_payload["quality_status"], "final")
-        self.assertEqual(
-            second_payload["sources"]["volatility"]["provider"],
-            "baostock_volatility",
-        )
-
-        with closing(sqlite3.connect(self.database_path)) as connection:
-            row = connection.execute(
-                """
-                SELECT source, provisional FROM raw_metrics
-                WHERE date='2026-07-17' AND metric='volatility'
-                """
-            ).fetchone()
-        self.assertEqual(row, ("baostock_volatility", 0))
-
-    def test_stale_returns_previous_snapshot_and_exit_code_three(self):
-        first = self.run_daily("2026-07-16")
-        self.assertEqual(first.returncode, 0, first.stderr)
-
-        payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
-        for provider in (
-            "eastmoney_index_volatility",
-            "eastmoney_limit_pool",
-            "cffex_futures_basis",
-            "eastmoney_southbound_summary",
-        ):
-            payload["providers"][provider]["records"] = []
-        stale_fixture = self.temp_path / "stale.json"
-        stale_fixture.write_text(
-            json.dumps(payload, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        completed = self.run_daily("2026-07-17", fixture_path=stale_fixture)
-        self.assertEqual(completed.returncode, 3)
-        payload = json.loads(completed.stdout)
-        self.assertFalse(payload["ok"])
-        self.assertEqual(payload["status"], "stale")
-        self.assertEqual(payload["as_of_date"], "2026-07-16")
-        self.assertTrue(payload["retry"]["recommended"])
-        self.assertEqual(payload["retry"]["after_seconds"], 900)
-
-    def test_non_trading_day_returns_snapshot_without_network(self):
-        first = self.run_daily("2026-07-10")
-        self.assertEqual(first.returncode, 0, first.stderr)
-
-        completed = self.run_daily("2026-07-11")
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["status"], "skipped_non_trading_day")
-        self.assertEqual(payload["as_of_date"], "2026-07-10")
-
-    def test_invalid_config_returns_json_and_exit_code_two(self):
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_ROOT / "scripts/cli.py"),
-                "daily",
-                "--config",
-                str(self.temp_path / "missing.yaml"),
-            ],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 2)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["schema_version"], "2.0")
-        self.assertEqual(payload["status"], "configuration_error")
-
-    def test_invalid_emotion_model_returns_exit_code_two(self):
-        invalid_config = self.temp_path / "invalid-emotion.yaml"
-        invalid_config.write_text(
-            """
-emotion_model:
-  short_threshold_window: 800
-  long_threshold_window: 756
-""".strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_ROOT / "scripts/cli.py"),
-                "daily",
-                "--date",
-                "2026-07-17",
-                "--config",
-                str(invalid_config),
-                "--database",
-                str(self.database_path),
-            ],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 2)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["status"], "configuration_error")
-        self.assertIn("短期阈值窗口", payload["errors"][0]["message"])
-
-    def test_invalid_date_returns_json_and_exit_code_two(self):
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(PROJECT_ROOT / "scripts/cli.py"),
-                "daily",
-                "--date",
-                "2026-99-99",
-            ],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
-        self.assertEqual(completed.returncode, 2)
-        payload = json.loads(completed.stdout)
-        self.assertEqual(payload["schema_version"], "2.0")
-        self.assertEqual(payload["status"], "argument_error")
-        self.assertEqual(completed.stderr, "")
+        self.assertEqual(completed.stdout.strip(), "False False")
 
 
 if __name__ == "__main__":

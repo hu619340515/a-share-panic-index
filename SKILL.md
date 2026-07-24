@@ -1,83 +1,143 @@
 ---
 name: a-share-panic-index
-description: 生成A股市场压力指数结构化日报和当前动态阈值图表，执行交易日判断、增量取数、多数据源回退、数据新鲜度校验与SQLite持久化。用户询问A股市场压力、恐慌程度、当日风险观察信号、自动化日报或需要压力指数图表时使用。
+description: 采集A股盘中实时恐慌指数、生成收盘正式指数与近一年真实记录图表，并返回适合Hermes解析的单个JSON结果。用户询问A股恐慌程度、市场压力、实时风险、日报、图表或数据源状态时使用。
 ---
 
-# A股市场压力指数
+# A股实时恐慌指数 V3
 
-## 固定入口
+## 唯一入口
 
-只调用 `scripts/cli.py`。项目只有动态模型 `2.0`，不要查找、选择或调用其他版本，也不要传入旧参数 `--type`。
-
-在技能目录安装依赖：
+始终调用：
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 scripts/cli.py <command>
 ```
 
-## 生成日报
+根目录 `cli.py` 仅是兼容包装。不要搜索、选择或执行其他版本，不要调用已删除的旧模块。Hermes 运行超时设置为 300 秒。
+
+## 输出处理
+
+- 单次命令只把 stdout 解析为一个 UTF-8 JSON 对象。
+- stderr 和 `logs/daily.log` 是日志，不要与 stdout 拼接。
+- 只有进程退出码为 `0` 且 JSON 的 `ok=true` 时才视为命令成功。
+- `realtime` 结果始终是盘中估计：`snapshot_type=realtime`、`finality=provisional`。
+- `daily` 或 `finalize` 只有在完整收盘桶存在时才返回：`snapshot_type=daily`、`finality=final`。
+
+## 实时结果
+
+单次采集：
+
+```bash
+python3 scripts/cli.py realtime
+```
+
+持续采集：
+
+```bash
+python3 scripts/cli.py realtime --watch --interval 60
+```
+
+向用户展示：
+
+- `result.realtime_panic_index`
+- `result.realtime_panic_index_raw`
+- `result.level`
+- `result.components`
+- `result.confidence`
+- `result.coverage`
+- `result.reference_mode`
+- `result.provisional_reasons`
+- `as_of_date` 和 `generated_at`
+
+明确说明“盘中实时估计，不是收盘正式值”。
+
+## 收盘日报
+
+15:10 后执行：
 
 ```bash
 python3 scripts/cli.py daily
 ```
 
-最长等待 300 秒。标准输出只解析为一个 UTF-8 JSON 对象；标准错误是日志，不要与 JSON 拼接。
-
-可选参数：
+也可使用同义命令：
 
 ```bash
-python3 scripts/cli.py daily \
-  --date 2026-07-17 \
-  --config /path/to/settings.yaml \
-  --database /path/to/panic_index.db \
-  --force-refresh
+python3 scripts/cli.py finalize
 ```
 
-向用户展示 `result.panic_index`、`result.status`、`result.emotion.percentile`、`result.emotion.trend`、`result.signal.reason`、`as_of_date` 和 `quality_status`。
+指定日期：
+
+```bash
+python3 scripts/cli.py daily --date 2026-07-24
+```
+
+如果返回 `market_not_ready`、`skipped_non_trading_day` 或非零退出码，不得把上一交易日结果描述成当天正式值。
 
 ## 生成图表
 
-画图前先执行一次 `daily`，并使用同一个数据库路径。只有当 `daily` 返回退出码 `0` 且存在可用快照时才继续：
+盘中图：
 
 ```bash
-python3 scripts/cli.py chart \
-  --database /path/to/panic_index.db \
-  --output reports/panic_index.png \
-  --dpi 160
+python3 scripts/cli.py chart --type intraday --output reports/intraday.png
 ```
 
-标准输出仍是单个 JSON 对象。只有同时满足以下条件时才发送 `chart.output` 指向的 PNG：
+近一年收盘图：
+
+```bash
+python3 scripts/cli.py chart --type daily --output reports/daily.png
+```
+
+只发送本次 JSON 的 `result.output` 指向的图片，并同时检查：
 
 - `status=chart_success`
-- `chart.model_version=2.0`
-- `chart.layout_version=2-panel-trading-sessions-v1`
-- `chart.is_fresh=true`
-- 本次命令退出码为 `0`
+- 进程退出码为 `0`
+- 输出文件本次确实存在
+- `result.type` 与请求类型一致
 
-任一条件不满足时都不要发送目录中已有的旧图片。新版命令会在失败或数据过期时主动删除目标 PNG，避免缓存图被误发。图表直接读取当前 V4 数据库，不会重新运行旧计算器。
+不得扫描目录后发送旧图片。日线图采用最近一个自然年窗口，但只绘制数据库真实正式记录；不补周末、休市日或缺失日期，不插值，不制造固定 252 条数据。历史不足一年时查看 `result.coverage_complete`、`result.start_date` 和 `result.end_date`，并向用户说明实际覆盖较短；不得把“近一年窗口”描述成“已经拥有一年数据”。
 
-非交易日的 `requested_date` 可以晚于 `as_of_date`：例如 2026-07-18 是周六，正确结果应显示运行日为 2026-07-18、数据截至最近交易日 2026-07-17，同时 `chart.is_fresh=true`。这不是数据过期。
+## Dashboard
 
-禁止调用已删除的 `cli.commands.chart`、`viz.charts`、`core.calculator`、`history`、`backtest`、`alert` 或 `monitor`。
+```bash
+python3 scripts/cli.py serve --host 127.0.0.1 --port 8000
+```
 
-## 处理退出码
+本机地址：`http://127.0.0.1:8000`。
 
-- `0`：成功、非交易日跳过或盘前返回上一交易日快照。
-- `2`：参数或配置错误，不要使用旧命令或旧图表参数重试。
-- `3`：目标交易日数据过期，等待 `retry.after_seconds` 后重试。
-- `4`：四项指标不完整，或图表数据库不是当前模型；先重新运行 `daily`。
-- `5`：计算、存储或图表生成失败。
+## 数据源诊断
+
+真实探测：
+
+```bash
+python3 scripts/cli.py sources probe --output reports/source_probe.json
+python3 scripts/cli.py sources status
+```
+
+只有未传 `--fixture` 的结果才能称为真实网络探测。免费接口可能变化，失败时根据 `errors`、Provider 健康状态和退出码说明，不得虚构行情数据。
+
+## 回放与验证
+
+```bash
+python3 scripts/cli.py replay --date 2026-07-24 --speed 20
+python3 scripts/cli.py validate --mode realtime --output reports/validation
+python3 scripts/cli.py validate --mode daily --output reports/validation
+```
+
+`replay`、`chart` 和 `current` 只读取数据库，不访问公网。
+
+## 退出码
+
+- `0`：成功、非交易日跳过、盘前或午休冻结。
+- `2`：参数或配置错误；修正命令，不要改用旧入口。
+- `3`：核心数据过期；根据 `retry.after_seconds` 重试。
+- `4`：必需数据、收盘桶或特征覆盖不足；不要生成正式结论。
+- `5`：计算、存储、验证或图表失败。
 - `6`：未预期错误。
 
-`quality_status=provisional` 表示使用当日备选数据源，可以展示，但要提示后续会自动复核。`result.signal` 只提供风险观察提示，不是买卖建议。
+## 数据原则
 
-## 数据约定
-
-- 波动率内部单位为年化小数；展示使用 `result.components.volatility_percent`。
-- 四项必需指标为波动率、涨跌停比、期货基差和南向资金，缺一项不生成当日指数。
-- 情绪等级使用 P05/P25/P75/P95 动态阈值，不使用固定 20/40/60/80 阈值，也不使用滞回机制。
-- 图表固定为两个面板，横轴按实际交易记录等距排列，不为周末和休市日预留空白日期。
-- 图表默认显示预期交易日向前一整年的实际交易记录，交易日数量由上交所日历和数据库真实记录决定，不固定为 252、243 或其他常数。
-- 动态模型中的 252/756 是阈值计算历史窗口，不是出图天数，不得据此修改图表周期。
-- 数据库不足近1年覆盖时返回错误，不补齐、不插值，也不生成虚构记录。
-- 日志写入 `logs/daily.log`，按天轮转并默认保留 30 天。
+- 不使用 0、50、上一值或随机数填补失败来源。
+- QVIX 缺失时保留 IF 组件并降低置信度，不填假 QVIX。
+- ETF 代理曲线取不到时明确进入 `structural_bootstrap`。
+- `confidence` 表示结果可信度，`coverage` 表示可用底层特征权重，两者不可互换。
+- 结果只用于市场压力观察，不构成买卖建议。

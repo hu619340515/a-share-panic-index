@@ -1,199 +1,170 @@
-# A股市场恐慌指数
+# A股实时恐慌指数 V3
 
-面向自动化和 Hermes 技能调用的 A 股市场压力指数工具。它不是对海外 VIX 的简单复刻，而是将 A 股波动率、涨跌停结构、股指期货基差和南向资金统一转换为历史分位，形成可持续更新的综合市场压力指标。
+面向自动化、Hermes 技能和本地 Dashboard 的 A 股市场压力工具。项目只保留 **V3 实时模型**，不再包含旧版计算器、旧版图表或多套命令入口。
 
-项目只保留当前动态模型 **2.0**，提供结构化日报、交易日与数据新鲜度判断、增量多源取数、SQLite 持久化和 PNG 图表。旧固定阈值图表、回测、告警、监控和多套 CLI 版本均已移除，避免自动化工具调用错误版本。
+V3 同时提供两类结果：
 
-## 适用场景
+- **盘中实时估计**：交易时段按 1 分钟采集，核心特征按 5 分钟桶计算，始终标记为 `provisional`。
+- **收盘正式指数**：只在目标交易日存在完整的 15:00 收盘桶后生成，标记为 `final`。
 
-- Hermes 定时执行并发送 A 股市场压力日报。
-- 观察当前压力指数、历史分位、动态等级和变化趋势。
-- 生成包含 P05/P25/P75/P95 动态阈值的历史图表。
-- 在主数据源延迟时使用备选源生成 provisional 快照，并在后续自动复核。
-- 为其他自动化工作流提供稳定的 JSON、退出码和 SQLite 数据接口。
+指数用于市场压力研究，不预测涨跌，也不构成投资建议。
 
-该指数用于描述市场压力状态，不预测指数涨跌，也不直接输出买卖信号。
+## 模型结构
 
-## 自动化流程
-
-```mermaid
-flowchart LR
-    A["Hermes 定时调用 daily"] --> B["交易日与新鲜度判断"]
-    B --> C["主数据源与备选源增量取数"]
-    C --> D["四项指标完整性校验"]
-    D --> E["动态分位模型 2.0"]
-    E --> F["事务写入 SQLite V4"]
-    F --> G["stdout 输出单个 JSON"]
-    G --> H["Hermes 解析并发送日报"]
-    F --> I["chart 读取数据库生成 PNG"]
-```
-
-## 唯一模型
-
-- 四项指标：波动率、涨跌停比、股指期货基差、南向资金。
-- 四项指标使用此前最多 504 个交易日计算历史经验分位，当天数据不参与当天标准化。
-- 动态阈值由 252 日和 756 日窗口按 30%/70% 混合，并使用 EMA20 平滑。
-- 情绪等级固定为：极度平静、偏平静、中性、偏恐慌、极度恐慌。
-- 应用版本固定为 `2.0`，数据库结构版本 `4` 仅用于内部迁移，不是可选模型版本。
-
-这里的 252/756 是动态阈值模型使用的短期/长期历史窗口，不是图表展示周期。图表默认展示预期交易日向前一整年的真实记录。
-
-### 指标含义
-
-| 指标 | 默认权重 | 压力方向 |
+| 一级组件 | 权重 | 主要信息 |
 |---|---:|---|
-| 沪深300年化波动率 | 40% | 波动率越高，市场压力越高 |
-| 涨跌停比 | 30% | 跌停占比越高，市场压力越高 |
-| 股指期货基差 | 20% | 按历史分位识别期货市场压力 |
-| 南向资金 | 10% | 流出越明显，市场压力越高 |
+| 波动与跳跃 | 30% | 跳空、相对昨收跌幅、盘中实现波动、下行波动、振幅、5分钟冲击 |
+| 市场宽度 | 30% | 上涨/下跌家数、跌幅超过3%/5%/7%的比例、中位数收益、涨跌停结构 |
+| 衍生品 | 25% | IF近月和次月年化基差、期限结构、基差扩张、QVIX |
+| 流动性 | 15% | 预计全天成交额缺口、5分钟非流动性、下跌放量和成交加速压力 |
+
+四组件使用广义均值 `p=1.5` 合成。等级固定为：极度平静、偏平静、中性、偏恐慌、极度恐慌。
+
+### 三种参考模式
+
+- `structural_bootstrap`：同时间桶历史不足 20 个交易日，使用固定金融锚点。
+- `self_calibrating`：20～59 日，逐步加入自采同时间历史。
+- `same_time_history`：60 日起以自采同时间历史为主要参考。
+
+成交额日内曲线优先使用 510300、159919、510050、510500 等真实 5 分钟数据的中位数组合。取不到真实代理曲线时才使用结构化 bootstrap，并在 `provisional_reasons` 中明确标记；不会把 bootstrap 冒充市场实测数据。自采全市场曲线在 20 日后开始混合，60 日权重达到 50%，120 日达到 75%。
+
+## 数据与可靠性
+
+实时主备源按配置依次切换：
+
+| 语义 | 默认顺序 |
+|---|---|
+| 沪深300实时行情 | mootdx → 腾讯 → 东方财富 → 新浪 |
+| 全市场宽度 | 东方财富 → 新浪 → mootdx → 腾讯 |
+| 涨跌停 | 东方财富 → 选股宝 → 全市场涨跌幅显式估算 |
+| IF明确合约 | 新浪 → AKShare中金所数据；mootdx扩展市场仅保留能力探测 |
+| QVIX | 300股指QVIX → 300ETF QVIX |
+| ETF代理曲线 | BaoStock → mootdx → 新浪 → 腾讯 → 东方财富 |
+
+所有实时值都保存来源、来源时间、接收时间、质量标记和交叉来源比较。连接错误、超时和可恢复 HTTP 错误最多重试 3 次；空数组、缺字段、单位错误和语义错误立即切换备选源。单来源硬超时和整轮总超时同时生效，失败事件会独立写入 Provider 健康表，不会产生残缺指数记录。
+
+免费网页接口可能限频、变更或暂时不可用。运行 `sources probe` 查看本机和当前网络环境的实际能力，不要把测试夹具结果当成真实网络验证。
 
 ## 安装
 
 需要 Python 3.10 或更高版本：
 
 ```bash
-python3 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-## 命令
+## CLI
 
-项目只支持以下三个命令。
-
-### 1. 生成结构化日报
+唯一实现入口位于 `scripts/cli.py`，根目录 `cli.py` 只是兼容包装。
 
 ```bash
-python3 scripts/cli.py daily
+python scripts/cli.py realtime
+python scripts/cli.py realtime --watch --interval 60
+python scripts/cli.py current
+python scripts/cli.py daily
+python scripts/cli.py finalize
+python scripts/cli.py chart --type intraday --output reports/intraday.png
+python scripts/cli.py chart --type daily --output reports/daily.png
+python scripts/cli.py rebuild
+python scripts/cli.py validate --mode realtime --output reports/validation
+python scripts/cli.py replay --date 2026-07-24 --speed 20
+python scripts/cli.py sources probe --output reports/source_probe.json
+python scripts/cli.py sources status
+python scripts/cli.py serve --host 127.0.0.1 --port 8000
 ```
 
-兼容入口：
-
-```bash
-python3 cli.py daily
-```
-
-可选参数：
+常用公共参数：
 
 ```text
---date YYYY-MM-DD
---force-refresh
 --config PATH
 --database PATH
 ```
 
-`daily` 的标准输出只有一个 UTF-8 JSON 对象，日志写入标准错误和 `logs/daily.log`。默认总超时为 300 秒。
+`realtime`、`daily` 和 `finalize` 还支持 `--date YYYY-MM-DD`；测试时可通过 `--fixture` 使用本地固定数据，生产运行不要传该参数。
 
-最小返回示例：
+### JSON 和退出码
 
-```json
-{
-  "schema_version": "2.0",
-  "ok": true,
-  "status": "success",
-  "exit_code": 0,
-  "as_of_date": "2026-07-17",
-  "is_fresh": true,
-  "quality_status": "final",
-  "result": {
-    "panic_index": 49.92,
-    "status": "中性",
-    "components": {
-      "volatility": 0.2805,
-      "volatility_percent": 28.05
-    }
-  },
-  "retry": {
-    "recommended": false,
-    "after_seconds": null
-  },
-  "errors": []
-}
-```
-
-### 自动化状态
-
-| 状态 | 行为 |
-|---|---|
-| `success` / `success_provisional` | 返回目标交易日完整结果 |
-| `skipped_non_trading_day` | 非交易日返回最近有效快照，退出码为 `0` |
-| `market_not_ready` | 交易日 15:30 前允许返回上一交易日快照 |
-| `stale` | 15:30 后当日数据仍不完整，返回旧快照并建议 900 秒后重试 |
-
-### 2. 生成当前动态图表
-
-先运行 `daily` 更新数据库，再执行：
-
-```bash
-python3 scripts/cli.py chart --output reports/panic_index.png
-```
-
-可选参数：
-
-```text
---database PATH
---config PATH
---output PATH
---days N（可选，覆盖默认近1年周期）
---dpi 160
-```
-
-图表直接读取新版 SQLite V4 的 `panic_index` 表，展示市场压力指数、P05/P25/P75/P95 每日动态阈值、历史分位、当前等级和 provisional 标记。命令返回单个 JSON 对象，图片路径位于 `chart.output`。
-
-新版图表固定为两个面板，横轴按实际交易记录等距排列，不会为周末和休市日留下空白位置。非交易日运行时会同时标注运行日和最近交易日，例如在 2026-07-18（周六）运行时，数据截至日期应为 2026-07-17，这是正常的新鲜快照。
-
-默认周期为预期交易日向前一整年，SQL 只读取该日期范围内数据库真实存在的记录。实际交易日数量由上交所日历、法定休市安排和数据完整性决定，不硬编码为 252、243 或其他常数。历史覆盖不足一年时命令直接报错，不补齐、不插值。
-
-自动化程序发送图片前必须检查 `chart.layout_version=2-panel-trading-sessions-v1`、`chart.model_version=2.0` 和 `chart.is_fresh=true`。命令失败或数据过期时不会保留目标路径中的旧 PNG。
-
-不存在 `--type`、`simple`、`comprehensive` 或 `comparison` 等旧版选择；传入旧参数会返回退出码 `2`。
-
-### 3. 人工查看当前值
-
-```bash
-python3 scripts/cli.py current
-```
-
-该命令用于终端人工查看。Hermes 和其他自动化程序应使用 `daily` 的 JSON。
-
-## 退出码
+单次命令的 stdout 只输出一个 UTF-8 JSON 对象，日志进入 stderr 和 `logs/daily.log`。watch 模式每轮输出一行 JSON。
 
 | 退出码 | 含义 |
 |---:|---|
-| 0 | 成功、非交易日跳过或盘前返回上一交易日快照 |
+| 0 | 成功、非交易日跳过、盘前或午休冻结 |
 | 2 | 参数或配置错误 |
-| 3 | 当日数据过期，按 `retry.after_seconds` 重试 |
-| 4 | 必需指标不完整，或图表数据库不是当前模型 |
-| 5 | 计算、存储或图表生成失败 |
+| 3 | 核心来源过期或时间偏差过大 |
+| 4 | 必需字段、完整收盘桶或可用特征权重不足 |
+| 5 | 计算、存储、验证或图表失败 |
 | 6 | 未预期错误 |
 
-## 数据与配置
+关键输出字段包括 `realtime_panic_index_raw`、`realtime_panic_index`、四组件、底层特征、`confidence`、`coverage`、`reference_mode`、`stale_sources` 和 `provisional_reasons`。
 
-- 默认数据库：`data_cache/panic_index.db`
-- 默认日志：`logs/daily.log`
-- 示例配置：`config/settings.yaml`
-- 波动率内部保存为年化小数，例如 `0.2805`；展示百分比使用 `28.05%`。
-- 备选数据源生成 `provisional` 记录，后续主历史源返回同日期数据时自动覆盖并重新计算。
-- `weights.implied_volatility` 仅作为旧配置兼容别名，新配置统一使用 `weights.volatility`。
-- 首次运行建立新版数据库；发现旧数据库时会先创建带时间戳的备份，再重建当前结构。
-- 正常运行使用 40 个自然日重叠窗口进行增量更新，同时使用完整本地历史计算动态模型。
-- 单个数据源最多重试 3 次、默认硬超时 30 秒，整次 `daily` 默认总超时 300 秒。
+## 图表规则
 
-## 项目结构
+- 盘中图只读取数据库中目标交易日的真实快照。
+- 日线图使用最近一个自然年的窗口，只绘制窗口内实际存在的正式记录。
+- 不为周末、休市日或缺失日期补点，不插值，不制造 252 条或任何固定数量的数据。
+- 若数据库实际历史不足一年，仍绘制已有真实记录和可见数据点，并在图内及 JSON 中标明实际覆盖范围；JSON 返回 `coverage_complete=false`、实际起止日期和 `missing_dates_filled=false`。
+- 命令开始时会删除同名旧输出；失败时不会把历史缓存图片当作本次结果。
+
+V3 不迁移旧模型指数，因此首次上线时日线历史可能只有当天。`rebuild` 只会使用数据库已保存的真实收盘快照，或调用者明确提供且可审计的真实历史夹具；它不会联网拼凑缺失指标，也不会合成一年的指数。随着每日收盘固化，图表会自然积累到近一年覆盖。
+
+## 数据库
+
+SQLite V5 使用 WAL、`synchronous=NORMAL` 和 5 秒 busy timeout。旧结构首次打开时先复制到带时间戳的备份目录，再创建 V5 数据库；旧指数不会复制进 V3。
+
+主要表：
 
 ```text
-cli.py                              兼容包装
-scripts/cli.py                      唯一 CLI 实现
-scripts/a_share_panic_index/        当前运行包
-config/settings.yaml                精简配置示例
-SKILL.md                            Hermes 技能说明
-tests/                              离线单元与端到端测试
+daily_raw_metrics
+daily_features
+daily_panic_index
+realtime_raw_metrics
+realtime_features
+realtime_panic_index
+intraday_aggregate_snapshots
+intraday_reference_curves
+provider_health
+provider_probe_results
+metadata
 ```
 
-## 测试
+实时原始聚合、特征、指数和 Provider 健康成功事件在同一事务写入。任一步骤失败都会回滚；失败的数据源健康事件单独记录。
+
+## Dashboard 和 API
+
+启动：
 
 ```bash
-python3 -m unittest discover -s tests -v
+python scripts/cli.py serve --host 127.0.0.1 --port 8000
 ```
 
-默认测试不访问公网。真实数据源测试仅在设置 `RUN_LIVE_TESTS=1` 时运行。
+打开 `http://127.0.0.1:8000`。页面展示实时值、raw 值、上一正式收盘、5/15/30 分钟变化、四组件、QVIX、IF合约和基差、上涨/下跌家数、涨跌停、累计成交额、预计全天成交额、来源与质量状态。
 
-> 本项目仅供研究和风险观察，不构成投资建议。
+API：
+
+```text
+GET /api/v1/realtime
+GET /api/v1/realtime/history
+GET /api/v1/daily/latest
+GET /api/v1/daily/history
+GET /api/v1/sources
+GET /api/v1/reference
+GET /healthz
+```
+
+## 验证与测试
+
+默认测试完全离线：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+真实网络测试仅在显式设置 `RUN_LIVE_TESTS=1` 时运行。数据源探测会生成中文表头的：
+
+```text
+reports/source_probe.json
+reports/source_coverage.csv
+reports/source_disagreements.csv
+```
+
+`replay` 和图表命令只读取已保存的真实记录，不访问公网。

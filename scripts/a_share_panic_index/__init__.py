@@ -1,4 +1,7 @@
-"""A股恐慌指数自动化运行包。"""
+"""A股实时恐慌指数 V3。"""
 
-APP_VERSION = "2.0"
+APP_VERSION = "3.0"
+MODEL_VERSION = "3.0-realtime"
+DB_SCHEMA_VERSION = "5"
+
 __version__ = APP_VERSION
